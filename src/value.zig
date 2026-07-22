@@ -162,7 +162,7 @@ pub const Spine = struct {
 
     pub fn toVec(self: *const Spine, gpa: std.mem.Allocator) []const *const Elim {
         const length: usize = @intCast(self.length);
-        const out = gpa.alloc(*const Elim, length) catch @panic("oom");
+        const out = gpa.alloc(*const Elim, length) catch util.oom();
         var cur = self;
         var i: usize = length;
         while (cur != &empty) {

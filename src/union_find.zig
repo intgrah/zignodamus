@@ -34,11 +34,11 @@ pub fn UnionFind(comptime A: type) type {
         }
 
         fn getOrPush(self: *Self, e: A) usize {
-            const gop = self.index_of.getOrPut(util.smp_allocator, e) catch @panic("oom");
+            const gop = self.index_of.getOrPut(util.smp_allocator, e) catch util.oom();
             if (gop.found_existing) return gop.value_ptr.*;
             const idx = self.entries.items.len;
             gop.value_ptr.* = idx;
-            self.entries.append(util.smp_allocator, .{ .key = e, .node = .{ .parent = idx, .rank = 0 } }) catch @panic("oom");
+            self.entries.append(util.smp_allocator, .{ .key = e, .node = .{ .parent = idx, .rank = 0 } }) catch util.oom();
             return idx;
         }
 

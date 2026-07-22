@@ -89,9 +89,9 @@ pub const Parser = struct {
         const anon = NamePtr.global(dag.names.intern(ar, Name.anon));
         const zero = LevelPtr.global(dag.levels.intern(ar, Level.zero));
         var names_by_idx: std.ArrayList(NamePtr) = .empty;
-        names_by_idx.append(util.smp_allocator, anon) catch @panic("oom");
+        names_by_idx.append(util.smp_allocator, anon) catch util.oom();
         var levels_by_idx: std.ArrayList(LevelPtr) = .empty;
-        levels_by_idx.append(util.smp_allocator, zero) catch @panic("oom");
+        levels_by_idx.append(util.smp_allocator, zero) catch util.oom();
         return .{
             .line_num = 0,
             .arena = ar,
@@ -187,7 +187,7 @@ fn pushExpr(self: *Parser, expected: BackRef, e: Expr) void {
 
 fn resizeOpt(comptime T: type, list: *std.ArrayList(T), new_len: usize, nil: T) void {
     const old_len = list.items.len;
-    list.resize(util.smp_allocator, new_len) catch @panic("oom");
+    list.resize(util.smp_allocator, new_len) catch util.oom();
     @memset(list.items[old_len..], nil);
 }
 
@@ -235,7 +235,7 @@ fn getLevelPtr(self: *const Parser, idx: u32) ParseError!LevelPtr {
 }
 
 fn getNames(self: *const Parser, ta: std.mem.Allocator, idxs: []const u32) ParseError![]const NamePtr {
-    var out = ta.alloc(NamePtr, idxs.len) catch @panic("oom");
+    var out = ta.alloc(NamePtr, idxs.len) catch util.oom();
     for (idxs, 0..) |idx, i| {
         out[i] = try getNamePtr(self, idx);
     }
@@ -243,7 +243,7 @@ fn getNames(self: *const Parser, ta: std.mem.Allocator, idxs: []const u32) Parse
 }
 
 fn getUparamsPtr(self: *Parser, ta: std.mem.Allocator, name_idxs: []const u32) ParseError!LevelsPtr {
-    var levels = ta.alloc(LevelPtr, name_idxs.len) catch @panic("oom");
+    var levels = ta.alloc(LevelPtr, name_idxs.len) catch util.oom();
     for (name_idxs, 0..) |name_idx, i| {
         const name_ptr = try getNamePtr(self, name_idx);
         const hash = hash64(.{ level.param_hash, name_ptr });
@@ -255,7 +255,7 @@ fn getUparamsPtr(self: *Parser, ta: std.mem.Allocator, name_idxs: []const u32) P
 }
 
 fn getLevelsPtr(self: *Parser, ta: std.mem.Allocator, idxs: []const u32) ParseError!LevelsPtr {
-    var levels = ta.alloc(LevelPtr, idxs.len) catch @panic("oom");
+    var levels = ta.alloc(LevelPtr, idxs.len) catch util.oom();
     for (idxs, 0..) |idx, i| {
         levels[i] = try getLevelPtr(self, idx);
     }
@@ -272,7 +272,7 @@ fn getExprPtr(self: *const Parser, idx: u32) ParseError!ExprPtr {
 
 fn nameToString(self: *const Parser, n: NamePtr) []const u8 {
     switch (n.asRef().kind) {
-        .anon => return util.smp_allocator.alloc(u8, 0) catch @panic("oom"),
+        .anon => return util.smp_allocator.alloc(u8, 0) catch util.oom(),
         .str => |s| {
             const pfx = nameToString(self, s.pfx);
             defer util.smp_allocator.free(pfx);
@@ -291,9 +291,9 @@ fn nameToString(self: *const Parser, n: NamePtr) []const u8 {
 
 fn joinName(pfx: []const u8, sfx: []const u8) []const u8 {
     if (pfx.len == 0) {
-        return util.smp_allocator.dupe(u8, sfx) catch @panic("oom");
+        return util.smp_allocator.dupe(u8, sfx) catch util.oom();
     }
-    var out = util.smp_allocator.alloc(u8, pfx.len + 1 + sfx.len) catch @panic("oom");
+    var out = util.smp_allocator.alloc(u8, pfx.len + 1 + sfx.len) catch util.oom();
     @memcpy(out[0..pfx.len], pfx);
     out[pfx.len] = '.';
     @memcpy(out[pfx.len + 1 ..], sfx);
@@ -350,7 +350,7 @@ fn asU32Array(ta: std.mem.Allocator, v: JVal) ParseError![]const u32 {
         .array => |a| a,
         else => return fail("expected array"),
     };
-    var out = ta.alloc(u32, arr.len) catch @panic("oom");
+    var out = ta.alloc(u32, arr.len) catch util.oom();
     for (arr, 0..) |item, i| {
         out[i] = try asU32(item);
     }
@@ -534,7 +534,7 @@ const Jp = struct {
 
     fn object(self: *Jp) ParseError!JVal {
         self.i += 1;
-        var members = std.ArrayList(Member).initCapacity(self.a, 12) catch @panic("oom");
+        var members = std.ArrayList(Member).initCapacity(self.a, 12) catch util.oom();
         self.skipWs();
         if (self.i < self.s.len and self.s[self.i] == '}') {
             self.i += 1;
@@ -548,7 +548,7 @@ const Jp = struct {
             if (self.i >= self.s.len or self.s[self.i] != ':') return fail("expected ':'");
             self.i += 1;
             const val = try self.value();
-            members.append(self.a, Member{ .key = key, .value = val }) catch @panic("oom");
+            members.append(self.a, Member{ .key = key, .value = val }) catch util.oom();
             self.skipWs();
             if (self.i >= self.s.len) return fail("unterminated object");
             if (self.s[self.i] == ',') {
@@ -566,7 +566,7 @@ const Jp = struct {
 
     fn array(self: *Jp) ParseError!JVal {
         self.i += 1;
-        var items = std.ArrayList(JVal).initCapacity(self.a, 8) catch @panic("oom");
+        var items = std.ArrayList(JVal).initCapacity(self.a, 8) catch util.oom();
         self.skipWs();
         if (self.i < self.s.len and self.s[self.i] == ']') {
             self.i += 1;
@@ -574,7 +574,7 @@ const Jp = struct {
         }
         while (true) {
             const val = try self.value();
-            items.append(self.a, val) catch @panic("oom");
+            items.append(self.a, val) catch util.oom();
             self.skipWs();
             if (self.i >= self.s.len) return fail("unterminated array");
             if (self.s[self.i] == ',') {
@@ -629,7 +629,7 @@ const Jp = struct {
         while (k < raw.len) {
             const c = raw[k];
             if (c != '\\') {
-                out.append(self.a, c) catch @panic("oom");
+                out.append(self.a, c) catch util.oom();
                 k += 1;
                 continue;
             }
@@ -637,35 +637,35 @@ const Jp = struct {
             if (k >= raw.len) return fail("bad escape");
             switch (raw[k]) {
                 '"' => {
-                    out.append(self.a, '"') catch @panic("oom");
+                    out.append(self.a, '"') catch util.oom();
                     k += 1;
                 },
                 '\\' => {
-                    out.append(self.a, '\\') catch @panic("oom");
+                    out.append(self.a, '\\') catch util.oom();
                     k += 1;
                 },
                 '/' => {
-                    out.append(self.a, '/') catch @panic("oom");
+                    out.append(self.a, '/') catch util.oom();
                     k += 1;
                 },
                 'b' => {
-                    out.append(self.a, 0x08) catch @panic("oom");
+                    out.append(self.a, 0x08) catch util.oom();
                     k += 1;
                 },
                 'f' => {
-                    out.append(self.a, 0x0c) catch @panic("oom");
+                    out.append(self.a, 0x0c) catch util.oom();
                     k += 1;
                 },
                 'n' => {
-                    out.append(self.a, '\n') catch @panic("oom");
+                    out.append(self.a, '\n') catch util.oom();
                     k += 1;
                 },
                 'r' => {
-                    out.append(self.a, '\r') catch @panic("oom");
+                    out.append(self.a, '\r') catch util.oom();
                     k += 1;
                 },
                 't' => {
-                    out.append(self.a, '\t') catch @panic("oom");
+                    out.append(self.a, '\t') catch util.oom();
                     k += 1;
                 },
                 'u' => {
@@ -681,7 +681,7 @@ const Jp = struct {
                     }
                     var buf: [4]u8 = undefined;
                     const n = std.unicode.utf8Encode(@intCast(cp), &buf) catch return fail("bad codepoint");
-                    out.appendSlice(self.a, buf[0..n]) catch @panic("oom");
+                    out.appendSlice(self.a, buf[0..n]) catch util.oom();
                 },
                 else => return fail("bad escape"),
             }
@@ -709,7 +709,7 @@ fn doNatVal(self: *Parser, idx: BackRef, s: []const u8) ParseError!void {
     if (!self.config.nat_extension) {
         return fail("Nat lit extension disallowed by checker execution config, but export file contains a nat literal");
     }
-    var big = BigUint.init(std.heap.smp_allocator) catch @panic("oom");
+    var big = BigUint.init(std.heap.smp_allocator) catch util.oom();
     big.setString(10, s) catch return fail("invalid BigUint decimal string");
     const num_ptr = BigUintPtr.global(self.dag.bignums.?.intern(self.arena, big));
     const hash = hash64(.{ expr.nat_lit_hash, num_ptr });
@@ -916,7 +916,7 @@ const Cur = struct {
         }
         var list = std.ArrayList(u32).empty;
         while (true) {
-            list.append(ta, try c.uint(u32)) catch @panic("oom");
+            list.append(ta, try c.uint(u32)) catch util.oom();
             if (c.i >= c.s.len) return error.Fallback;
             switch (c.s[c.i]) {
                 ',' => c.i += 1,
@@ -1316,7 +1316,7 @@ fn go1(self: *Parser, ta: std.mem.Allocator, line: []const u8) ParseError!void {
                 util.smp_allocator.free(name_string);
                 return fail("export file declares unpermitted axiom");
             } else {
-                self.skipped.append(util.smp_allocator, name_string) catch @panic("oom");
+                self.skipped.append(util.smp_allocator, name_string) catch util.oom();
             }
         }
         return;
@@ -1386,7 +1386,7 @@ fn go1(self: *Parser, ta: std.mem.Allocator, line: []const u8) ParseError!void {
             const is_unsafe = try asBool(io.get("isUnsafe") orelse return fail("missing isUnsafe"));
             if (is_unsafe) return fail("unsafe declarations are not supported");
             const iname = try getNamePtr(self, try asU32(io.get("name") orelse return fail("missing name")));
-            self.mutual_block_sizes.put(util.smp_allocator, iname, .{ block_start, block_size }) catch @panic("oom");
+            self.mutual_block_sizes.put(util.smp_allocator, iname, .{ block_start, block_size }) catch util.oom();
             const uparams = try getUparamsPtr(self, ta, try asU32Array(ta, io.get("levelParams") orelse return fail("missing levelParams")));
             const ty = try getExprPtr(self, try asU32(io.get("type") orelse return fail("missing type")));
             const all_ind_names = self.arena.dupe(NamePtr, try getNames(self, ta, try asU32Array(ta, io.get("all") orelse return fail("missing all"))));
@@ -1436,7 +1436,7 @@ fn go1(self: *Parser, ta: std.mem.Allocator, line: []const u8) ParseError!void {
             const uparams = try getUparamsPtr(self, ta, try asU32Array(ta, ro.get("levelParams") orelse return fail("missing levelParams")));
             const info = DeclarInfo{ .name = rname, .ty = ty, .uparams = uparams };
             const rules_arr = try objAsArray(ro.get("rules") orelse return fail("missing rules"));
-            var rules = ta.alloc(RecRule, rules_arr.len) catch @panic("oom");
+            var rules = ta.alloc(RecRule, rules_arr.len) catch util.oom();
             for (rules_arr, 0..) |rule_v, i| {
                 const rr = try objAsObject(rule_v);
                 rules[i] = RecRule{
@@ -1471,7 +1471,7 @@ fn go1(self: *Parser, ta: std.mem.Allocator, line: []const u8) ParseError!void {
 
 fn insertDeclar(self: *Parser, n: NamePtr, d: Declar) ParseError!void {
     if (self.declars.get(n) != null) return fail("duplicate declaration in export file");
-    self.declars.put(util.smp_allocator, n, d) catch @panic("oom");
+    self.declars.put(util.smp_allocator, n, d) catch util.oom();
 }
 
 fn objAsObject(v: JVal) ParseError!JVal {

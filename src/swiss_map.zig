@@ -1,3 +1,4 @@
+const util = @import("util.zig");
 const std = @import("std");
 const hash = @import("hash.zig");
 
@@ -73,7 +74,7 @@ pub fn SwissMap(comptime K: type, comptime Val: type, comptime Ctx: type) type {
         }
 
         noinline fn allocCap(self: *Self, a: std.mem.Allocator, newcap: usize) void {
-            const buf = a.alignedAlloc(u8, .of(Slot), bufLen(newcap)) catch @panic("oom");
+            const buf = a.alignedAlloc(u8, .of(Slot), bufLen(newcap)) catch util.oom();
             setEmpty(buf.ptr, newcap + 16);
             const old_ctrl = self.ctrl;
             const old_slots = self.slots;

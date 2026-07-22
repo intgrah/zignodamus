@@ -72,7 +72,7 @@ const Waiting = struct { rec_val: V, args: []const V };
 
 pub fn mkBvarHc(self: *TypeChecker, level: u32, ty: V) V {
     const key = .{ level, @intFromPtr(ty) };
-    const gop = self.tc_cache.bvar_hc.getOrPut(util.smp_allocator, key) catch @panic("oom");
+    const gop = self.tc_cache.bvar_hc.getOrPut(util.smp_allocator, key) catch util.oom();
     if (gop.found_existing) return gop.value_ptr.*;
     const empty = value.spineEmpty();
     const v = value.mkBvarWithEmpty(self.arena, level, ty, empty);
@@ -82,7 +82,7 @@ pub fn mkBvarHc(self: *TypeChecker, level: u32, ty: V) V {
 
 fn mkUnfoldHc(self: *TypeChecker, name: NamePtr, levels: LevelsPtr, spine: S, head_value: *OnceCell(V)) V {
     const key = .{ name, levels, @intFromPtr(spine), @intFromPtr(head_value) };
-    const gop = self.tc_cache.unfold_hc.getOrPut(util.smp_allocator, key) catch @panic("oom");
+    const gop = self.tc_cache.unfold_hc.getOrPut(util.smp_allocator, key) catch util.oom();
     if (gop.found_existing) return gop.value_ptr.*;
     const u = value.mkUnfold(self.arena, name, levels, spine, head_value);
     gop.value_ptr.* = u;
@@ -91,7 +91,7 @@ fn mkUnfoldHc(self: *TypeChecker, name: NamePtr, levels: LevelsPtr, spine: S, he
 
 fn envExtendHc(self: *TypeChecker, parent: E, v: V) E {
     const key = .{ @intFromPtr(parent), @intFromPtr(v) };
-    const gop = self.tc_cache.env_hc.getOrPut(util.smp_allocator, key) catch @panic("oom");
+    const gop = self.tc_cache.env_hc.getOrPut(util.smp_allocator, key) catch util.oom();
     if (gop.found_existing) return gop.value_ptr.*;
     const e = value.envExtend(self.arena, parent, v);
     gop.value_ptr.* = e;
@@ -101,7 +101,7 @@ fn envExtendHc(self: *TypeChecker, parent: E, v: V) E {
 inline fn spineSnocHc(self: *TypeChecker, prev: S, elim: Elim) S {
     const ek = elimKey(&elim);
     const key = .{ @intFromPtr(prev), ek[0], ek[1], ek[2] };
-    const gop = self.tc_cache.spine_hc.getOrPut(util.smp_allocator, key) catch @panic("oom");
+    const gop = self.tc_cache.spine_hc.getOrPut(util.smp_allocator, key) catch util.oom();
     if (gop.found_existing) return gop.value_ptr.*;
     const s = value.spineSnoc(self.arena, prev, elim);
     gop.value_ptr.* = s;
@@ -111,7 +111,7 @@ inline fn spineSnocHc(self: *TypeChecker, prev: S, elim: Elim) S {
 inline fn mkRigidHc(self: *TypeChecker, head: RigidHead, spine: S) V {
     const hk = rigidHeadKey(&head);
     const key = .{ hk[0], hk[1], hk[2], @intFromPtr(spine) };
-    const gop = self.tc_cache.rigid_hc.getOrPut(util.smp_allocator, key) catch @panic("oom");
+    const gop = self.tc_cache.rigid_hc.getOrPut(util.smp_allocator, key) catch util.oom();
     if (gop.found_existing) return gop.value_ptr.*;
     const v = value.mkRigid(self.arena, head, spine);
     gop.value_ptr.* = v;
@@ -127,7 +127,7 @@ inline fn mkLamHc(
     body_expr: ExprPtr,
 ) V {
     const key = .{ binder_type, @intFromPtr(e), body_expr };
-    const gop = self.tc_cache.lam_hc.getOrPut(util.smp_allocator, key) catch @panic("oom");
+    const gop = self.tc_cache.lam_hc.getOrPut(util.smp_allocator, key) catch util.oom();
     if (gop.found_existing) return gop.value_ptr.*;
     const v = value.mkLam(self.arena, binder_name, binder_style, binder_type, Closure{ .env = e, .body = body_expr });
     gop.value_ptr.* = v;
@@ -143,13 +143,13 @@ inline fn canonicalizeForSpine(self: *TypeChecker, v: V) V {
         return c;
     }
     const c = canonCompute(self, v);
-    self.tc_cache.canon_cache.put(util.smp_allocator, key, c) catch @panic("oom");
+    self.tc_cache.canon_cache.put(util.smp_allocator, key, c) catch util.oom();
     return c;
 }
 
 fn canonContent(self: *TypeChecker, disc: u8, content: u64, v: V) V {
     const key = .{ disc, content };
-    const gop = self.tc_cache.content_hc.getOrPut(util.smp_allocator, key) catch @panic("oom");
+    const gop = self.tc_cache.content_hc.getOrPut(util.smp_allocator, key) catch util.oom();
     if (gop.found_existing) return gop.value_ptr.*;
     gop.value_ptr.* = v;
     return v;
@@ -197,7 +197,7 @@ inline fn mkPiHc(
     body_expr: ExprPtr,
 ) V {
     const key = .{ @intFromPtr(domain), @intFromPtr(e), body_expr };
-    const gop = self.tc_cache.pi_hc.getOrPut(util.smp_allocator, key) catch @panic("oom");
+    const gop = self.tc_cache.pi_hc.getOrPut(util.smp_allocator, key) catch util.oom();
     if (gop.found_existing) return gop.value_ptr.*;
     const v = value.mkPi(self.arena, binder_name, binder_style, domain, Closure{ .env = e, .body = body_expr });
     gop.value_ptr.* = v;
@@ -222,9 +222,9 @@ pub fn eval(self: *TypeChecker, depth: u32, e: E, ex: ExprPtr) V {
         return v;
     }
     const v = evalNoCache(self, depth, e, ex);
-    const newly = (self.tc_cache.open_eval_seen.fetchPut(util.smp_allocator, ex, {}) catch @panic("oom")) == null;
+    const newly = (self.tc_cache.open_eval_seen.fetchPut(util.smp_allocator, ex, {}) catch util.oom()) == null;
     if (!newly) {
-        self.tc_cache.open_eval_cache.put(util.smp_allocator, key, v) catch @panic("oom");
+        self.tc_cache.open_eval_cache.put(util.smp_allocator, key, v) catch util.oom();
     }
     return v;
 }
@@ -234,7 +234,7 @@ fn evalClosed(self: *TypeChecker, depth: u32, e: E, ex: ExprPtr) V {
         return v;
     }
     const v = evalNoCache(self, depth, e, ex);
-    self.tc_cache.closed_eval_cache.put(util.smp_allocator, ex, v) catch @panic("oom");
+    self.tc_cache.closed_eval_cache.put(util.smp_allocator, ex, v) catch util.oom();
     return v;
 }
 
@@ -301,14 +301,14 @@ fn evalNoCache(self: *TypeChecker, depth: u32, e: E, ex: ExprPtr) V {
 
             var funs = std.ArrayList(ExprPtr).empty;
             defer funs.deinit(self.ctx.bump);
-            funs.ensureTotalCapacity(self.ctx.bump, count) catch @panic("oom");
-            funs.append(self.ctx.bump, fun) catch @panic("oom");
-            funs.append(self.ctx.bump, f2) catch @panic("oom");
+            funs.ensureTotalCapacity(self.ctx.bump, count) catch util.oom();
+            funs.append(self.ctx.bump, fun) catch util.oom();
+            funs.append(self.ctx.bump, f2) catch util.oom();
             var cur2 = a2;
             while (true) {
                 const ce = cur2.asRef().kind;
                 if (ce == .app) {
-                    funs.append(self.ctx.bump, ce.app.fun) catch @panic("oom");
+                    funs.append(self.ctx.bump, ce.app.fun) catch util.oom();
                     cur2 = ce.app.arg;
                 } else {
                     break;
@@ -399,7 +399,7 @@ fn evalNoCache(self: *TypeChecker, depth: u32, e: E, ex: ExprPtr) V {
             }
             const empty = value.spineEmpty();
             const v = value.mkLocalWithEmpty(self.arena, ex, empty);
-            self.local_v_cache.put(util.smp_allocator, ex, v) catch @panic("oom");
+            self.local_v_cache.put(util.smp_allocator, ex, v) catch util.oom();
             return v;
         },
         .proj => |pr| {
@@ -428,7 +428,7 @@ pub fn evalConst(self: *TypeChecker, name: NamePtr, levels: LevelsPtr) V {
         .inductive => value.mkRigidHeadWithEmpty(self.arena, RigidHead{ .inductive = .{ .name = name, .levels = levels } }, empty),
         .axiom, .opaque_ => value.mkRigidHeadWithEmpty(self.arena, RigidHead{ .axiom = .{ .name = name, .levels = levels } }, empty),
     } else value.mkRigidHeadWithEmpty(self.arena, RigidHead{ .axiom = .{ .name = name, .levels = levels } }, empty);
-    self.tc_cache.const_head_value_cache.put(util.smp_allocator, .{ name, levels }, v) catch @panic("oom");
+    self.tc_cache.const_head_value_cache.put(util.smp_allocator, .{ name, levels }, v) catch util.oom();
     return v;
 }
 
@@ -449,7 +449,7 @@ pub fn constResultLevel(self: *TypeChecker, name: NamePtr, levels: LevelsPtr) ?L
             },
             .sort => |s| {
                 const l = level_mod.simplify(self.ctx, s.level);
-                self.tc_cache.const_result_level_cache.put(util.smp_allocator, .{ name, levels }, l) catch @panic("oom");
+                self.tc_cache.const_result_level_cache.put(util.smp_allocator, .{ name, levels }, l) catch util.oom();
                 return l;
             },
             else => return null,
@@ -465,7 +465,7 @@ pub fn constHeadType(self: *TypeChecker, name: NamePtr, levels: LevelsPtr) V {
     const ty_e = expr.substExprLevels(self.ctx, info.ty, info.uparams, levels);
     const empty = value.envEmpty();
     const v = eval(self, 0, empty, ty_e);
-    self.tc_cache.const_head_type_cache.put(util.smp_allocator, .{ name, levels }, v) catch @panic("oom");
+    self.tc_cache.const_head_type_cache.put(util.smp_allocator, .{ name, levels }, v) catch util.oom();
     return v;
 }
 
@@ -870,7 +870,7 @@ pub fn forceAll(self: *TypeChecker, depth: u32, v: V) V {
                 continue;
             },
             .descend => |d| {
-                waiting.append(self.ctx.bump, .{ .rec_val = cur, .args = d.args }) catch @panic("oom");
+                waiting.append(self.ctx.bump, .{ .rec_val = cur, .args = d.args }) catch util.oom();
                 cur = d.major;
                 continue;
             },
@@ -882,12 +882,12 @@ pub fn forceAll(self: *TypeChecker, depth: u32, v: V) V {
                 const key = @intFromPtr(rec_val);
                 if (fireValue(self, depth, rec_val, w.args, cur)) |res| {
                     self.ctx.bump.free(w.args);
-                    self.tc_cache.iota_cache.put(util.smp_allocator, key, res) catch @panic("oom");
+                    self.tc_cache.iota_cache.put(util.smp_allocator, key, res) catch util.oom();
                     cur = res;
                     break;
                 } else {
                     self.ctx.bump.free(w.args);
-                    _ = self.tc_cache.iota_stuck.fetchPut(util.smp_allocator, key, {}) catch @panic("oom");
+                    _ = self.tc_cache.iota_stuck.fetchPut(util.smp_allocator, key, {}) catch util.oom();
                     cur = rec_val;
                 }
             } else {
@@ -917,7 +917,7 @@ fn iotaStep(self: *TypeChecker, depth: u32, v: V) ForceStep {
                 }
                 if (kPreReduce(self, depth, rec, h.levels, args)) |res| {
                     self.ctx.bump.free(args);
-                    self.tc_cache.iota_cache.put(util.smp_allocator, key, res) catch @panic("oom");
+                    self.tc_cache.iota_cache.put(util.smp_allocator, key, res) catch util.oom();
                     return ForceStep{ .reduced = res };
                 }
                 const major_h = stripHead(self, depth, args[rec.majorIdx()]);
@@ -926,10 +926,10 @@ fn iotaStep(self: *TypeChecker, depth: u32, v: V) ForceStep {
                 }
                 defer self.ctx.bump.free(args);
                 if (fireRecursor(self, depth, rec, h.levels, args, major_h)) |res| {
-                    self.tc_cache.iota_cache.put(util.smp_allocator, key, res) catch @panic("oom");
+                    self.tc_cache.iota_cache.put(util.smp_allocator, key, res) catch util.oom();
                     return ForceStep{ .reduced = res };
                 } else {
-                    _ = self.tc_cache.iota_stuck.fetchPut(util.smp_allocator, key, {}) catch @panic("oom");
+                    _ = self.tc_cache.iota_stuck.fetchPut(util.smp_allocator, key, {}) catch util.oom();
                     return ForceStep.done;
                 }
             },
@@ -954,10 +954,10 @@ fn iotaStep(self: *TypeChecker, depth: u32, v: V) ForceStep {
                 }
                 defer self.ctx.bump.free(args);
                 if (fireQuot(self, depth, name, args, major_h)) |res| {
-                    self.tc_cache.iota_cache.put(util.smp_allocator, key, res) catch @panic("oom");
+                    self.tc_cache.iota_cache.put(util.smp_allocator, key, res) catch util.oom();
                     return ForceStep{ .reduced = res };
                 } else {
-                    _ = self.tc_cache.iota_stuck.fetchPut(util.smp_allocator, key, {}) catch @panic("oom");
+                    _ = self.tc_cache.iota_stuck.fetchPut(util.smp_allocator, key, {}) catch util.oom();
                     return ForceStep.done;
                 }
             },
@@ -1093,9 +1093,9 @@ pub fn iotaValue(self: *TypeChecker, depth: u32, v: V) ?V {
         else => @as(?V, null),
     };
     if (result) |rr| {
-        self.tc_cache.iota_cache.put(util.smp_allocator, v_key, rr) catch @panic("oom");
+        self.tc_cache.iota_cache.put(util.smp_allocator, v_key, rr) catch util.oom();
     } else {
-        _ = self.tc_cache.iota_stuck.fetchPut(util.smp_allocator, v_key, {}) catch @panic("oom");
+        _ = self.tc_cache.iota_stuck.fetchPut(util.smp_allocator, v_key, {}) catch util.oom();
     }
     return result;
 }
@@ -1113,13 +1113,13 @@ pub fn unfoldConst(self: *TypeChecker, name: NamePtr, levels: LevelsPtr) ?V {
     const body = expr.substExprLevels(self.ctx, def_value, def_uparams, levels);
     const empty = value.envEmpty();
     const v = eval(self, 0, empty, body);
-    self.tc_cache.unfold_const_cache.put(util.smp_allocator, .{ name, levels }, v) catch @panic("oom");
+    self.tc_cache.unfold_const_cache.put(util.smp_allocator, .{ name, levels }, v) catch util.oom();
     return v;
 }
 
 pub fn spineApps(self: *TypeChecker, depth: u32, spine: S) ?[]const V {
     const n: usize = @intCast(spine.length);
-    const slice = self.ctx.bump.alloc(V, n) catch @panic("oom");
+    const slice = self.ctx.bump.alloc(V, n) catch util.oom();
     var i: usize = n;
     var cur: S = spine;
     while (cur != &Spine.empty) {
@@ -1201,7 +1201,7 @@ fn fireRecursor(
         const body = expr.substExprLevels(self.ctx, rec_rule.val, rec.info.uparams, levels);
         const empty = value.envEmpty();
         const v = eval(self, 0, empty, body);
-        self.tc_cache.rec_rule_cache.put(util.smp_allocator, cache_key, v) catch @panic("oom");
+        self.tc_cache.rec_rule_cache.put(util.smp_allocator, cache_key, v) catch util.oom();
         break :blk v;
     };
     const nprefix = @as(usize, rec.num_params + rec.num_motives + rec.num_minors);
@@ -1230,7 +1230,7 @@ fn natRecNatlit(
     rec: *const RecursorData,
     levels: LevelsPtr,
 ) V {
-    const n = n_ptr.asRef().clone() catch @panic("oom");
+    const n = n_ptr.asRef().clone() catch util.oom();
     defer num_bigint.free(n);
     const nparams = @as(usize, rec.num_params);
     const nmotives = @as(usize, rec.num_motives);
@@ -1272,7 +1272,7 @@ fn tryStructEtaReduce(self: *TypeChecker, depth: u32, major: V, rec: *const Recu
         return cached;
     }
     const result = tryStructEtaReduceUncached(self, depth, major, rec, rec_induct);
-    self.tc_cache.struct_eta_cache.put(util.smp_allocator, key, result) catch @panic("oom");
+    self.tc_cache.struct_eta_cache.put(util.smp_allocator, key, result) catch util.oom();
     return result;
 }
 
@@ -1392,7 +1392,7 @@ fn natLitToCtorVal(self: *TypeChecker, depth: u32, n: BigUintPtr) ?V {
     if (!self.ctx.export_file.config.nat_extension) {
         return null;
     }
-    const nv = n.asRef().clone() catch @panic("oom");
+    const nv = n.asRef().clone() catch util.oom();
     defer num_bigint.free(nv);
     const levels = TcCtx.allocLevels(self.ctx, &.{});
     const empty = value.spineEmpty();
@@ -1558,7 +1558,7 @@ pub fn valueHasFreeBvar(self: *TypeChecker, depth: u32, v0: V) bool {
         .lam, .pi => false,
         .thunk => @panic("force_thunk left a Thunk"),
     };
-    self.tc_cache.fvar_cache.put(util.smp_allocator, key, r) catch @panic("oom");
+    self.tc_cache.fvar_cache.put(util.smp_allocator, key, r) catch util.oom();
     return r;
 }
 

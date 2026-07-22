@@ -208,7 +208,7 @@ fn instAux(self: *TcCtx, e: ExprPtr, substs: []const ExprPtr, offset: u16) ExprP
                 break :blk TcCtx.mkProj(self, x.ty_name, x.idx, structure);
             },
         };
-        self.expr_cache.inst_cache.put(util.smp_allocator, .{ e, offset }, calcd) catch @panic("oom");
+        self.expr_cache.inst_cache.put(util.smp_allocator, .{ e, offset }, calcd) catch util.oom();
         return calcd;
     }
 }
@@ -260,7 +260,7 @@ fn abstrAuxLevels(self: *TcCtx, e: ExprPtr, start_pos: u16, num_open_binders: u1
             },
             .@"var", .sort, .@"const" => @panic("should flag as no locals"),
         };
-        self.expr_cache.abstr_cache_levels.put(util.smp_allocator, .{ e, start_pos, num_open_binders }, calcd) catch @panic("oom");
+        self.expr_cache.abstr_cache_levels.put(util.smp_allocator, .{ e, start_pos, num_open_binders }, calcd) catch util.oom();
         return calcd;
     }
 }
@@ -314,7 +314,7 @@ fn abstrAux(self: *TcCtx, e: ExprPtr, locals: []const ExprPtr, offset: u16) Expr
             },
             .@"var", .sort, .@"const" => @panic("should flag as no locals"),
         };
-        self.expr_cache.abstr_cache.put(util.smp_allocator, .{ e, offset }, calcd) catch @panic("oom");
+        self.expr_cache.abstr_cache.put(util.smp_allocator, .{ e, offset }, calcd) catch util.oom();
         return calcd;
     }
 }
@@ -365,7 +365,7 @@ fn substAux(self: *TcCtx, e: ExprPtr, ks: LevelsPtr, vs: LevelsPtr) ExprPtr {
                 break :blk TcCtx.mkProj(self, x.ty_name, x.idx, structure);
             },
         };
-        self.expr_cache.subst_cache.put(util.smp_allocator, .{ e, ks, vs }, r) catch @panic("oom");
+        self.expr_cache.subst_cache.put(util.smp_allocator, .{ e, ks, vs }, r) catch util.oom();
         return r;
     }
 }
@@ -381,7 +381,7 @@ pub fn substExprLevels(self: *TcCtx, e: ExprPtr, ks: LevelsPtr, vs: LevelsPtr) E
     self.expr_cache.subst_cache.clearRetainingCapacity();
     util.assert(ks.asRef().len == vs.asRef().len);
     const out = substAux(self, e, ks, vs);
-    self.expr_cache.dsubst_cache.put(util.smp_allocator, .{ e, ks, vs }, out) catch @panic("oom");
+    self.expr_cache.dsubst_cache.put(util.smp_allocator, .{ e, ks, vs }, out) catch util.oom();
     return out;
 }
 
@@ -422,7 +422,7 @@ pub fn unfoldApps(a: std.mem.Allocator, e_in: ExprPtr) struct { fun: ExprPtr, ar
         switch (e.asRef().kind) {
             .app => |x| {
                 e = x.fun;
-                args.append(a, x.arg) catch @panic("oom");
+                args.append(a, x.arg) catch util.oom();
             },
             else => break,
         }
@@ -452,7 +452,7 @@ pub fn unfoldAppsStack(a: std.mem.Allocator, e_in: ExprPtr) struct { fun: ExprPt
     while (true) {
         switch (e.asRef().kind) {
             .app => |x| {
-                args.append(a, x.arg) catch @panic("oom");
+                args.append(a, x.arg) catch util.oom();
                 e = x.fun;
             },
             else => break,
@@ -536,7 +536,7 @@ pub fn strLitToConstructor(self: *TcCtx, s: StringPtr) ?ExprPtr {
     var codepoints: std.ArrayList(u21) = .empty;
     defer codepoints.deinit(self.bump);
     while (iter.nextCodepoint()) |c| {
-        codepoints.append(self.bump, c) catch @panic("oom");
+        codepoints.append(self.bump, c) catch util.oom();
     }
     var i: usize = codepoints.items.len;
     while (i > 0) {
@@ -672,7 +672,7 @@ fn findConstAux(self: *const TcCtx, e: ExprPtr, cl: anytype, pred: anytype, cach
             .local => |x| findConstAux(self, x.binder_type, cl, pred, cache),
             .proj => |x| findConstAux(self, x.structure, cl, pred, cache),
         };
-        cache.put(util.smp_allocator, e, r) catch @panic("oom");
+        cache.put(util.smp_allocator, e, r) catch util.oom();
         return r;
     }
 }

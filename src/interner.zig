@@ -76,7 +76,7 @@ fn Interner(comptime T: type) type {
         }
 
         noinline fn allocCap(self: *Self, newcap: usize) void {
-            const buf = smp_allocator.alignedAlloc(u8, .of(Slot), bufLen(newcap)) catch @panic("oom");
+            const buf = smp_allocator.alignedAlloc(u8, .of(Slot), bufLen(newcap)) catch util.oom();
             @memset(buf[0 .. newcap + 16], ctrl_empty);
             const old_ctrl = self.ctrl;
             const old_slots = self.slots;
@@ -237,7 +237,7 @@ pub const BigUintInterner = struct {
     pub fn insert(self: *BigUintInterner, ar: *Arena, v: BigUint) *const BigUint {
         const r = ar.create(BigUint);
         r.* = v;
-        self.table.putContext(ar.child, r, {}, Context{}) catch @panic("oom");
+        self.table.putContext(ar.child, r, {}, Context{}) catch util.oom();
         return r;
     }
     pub fn intern(self: *BigUintInterner, ar: *Arena, v: BigUint) *const BigUint {
@@ -281,7 +281,7 @@ pub const LevelsInterner = struct {
     pub fn intern(self: *LevelsInterner, ar: *Arena, v: []const LevelPtr) []const LevelPtr {
         if (self.get(v)) |r| return r;
         const r = ar.dupe(LevelPtr, v);
-        self.table.putContext(ar.child, r, {}, Context{}) catch @panic("oom");
+        self.table.putContext(ar.child, r, {}, Context{}) catch util.oom();
         return r;
     }
 

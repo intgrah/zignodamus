@@ -1,3 +1,4 @@
+const util = @import("util.zig");
 const std = @import("std");
 
 child: std.mem.Allocator,
@@ -33,8 +34,8 @@ pub fn deinit(self: *Arena) void {
 fn grow(self: *Arena, min: usize) void {
     var size = self.next_slab_size;
     while (size < min) size *= 2;
-    const slab = self.child.alignedAlloc(u8, .of(usize), size) catch @panic("oom");
-    self.slabs.append(self.child, slab) catch @panic("oom");
+    const slab = self.child.alignedAlloc(u8, .of(usize), size) catch util.oom();
+    self.slabs.append(self.child, slab) catch util.oom();
     self.ptr = slab.ptr;
     self.end = slab.ptr + slab.len;
     self.next_slab_size = @min(size * 2, max_slab_size);

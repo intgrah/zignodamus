@@ -1,3 +1,4 @@
+const util = @import("util.zig");
 const std = @import("std");
 
 const NamePtr = @import("ptr.zig").NamePtr;
@@ -43,12 +44,12 @@ pub fn appendIndexAfter(self: *TcCtx, n: NamePtr, idx: u64) NamePtr {
     switch (n.asRef().kind) {
         .str => |st| {
             const s = st.sfx.asRef().*;
-            const formatted = std.fmt.allocPrint(self.arena.child, "{s}_{d}", .{ s, idx }) catch @panic("oom");
+            const formatted = std.fmt.allocPrint(self.arena.child, "{s}_{d}", .{ s, idx }) catch util.oom();
             const sp = TcCtx.allocString(self, formatted);
             return TcCtx.str(self, st.pfx, sp);
         },
         else => {
-            const formatted = std.fmt.allocPrint(self.arena.child, "_{d}", .{idx}) catch @panic("oom");
+            const formatted = std.fmt.allocPrint(self.arena.child, "_{d}", .{idx}) catch util.oom();
             const sp = TcCtx.allocString(self, formatted);
             return TcCtx.str(self, n, sp);
         },

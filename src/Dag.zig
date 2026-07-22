@@ -127,7 +127,7 @@ pub fn mkNameCache(self: *const Dag, anon: NamePtr) NameCache {
 }
 
 fn putNatRed(cache: *NameCache, n: ?NamePtr, k: NatRed) void {
-    if (n) |nn| cache.nat_red.put(smp_allocator, nn, k) catch @panic("oom");
+    if (n) |nn| cache.nat_red.put(smp_allocator, nn, k) catch util.oom();
 }
 
 pub const NatRed = enum {

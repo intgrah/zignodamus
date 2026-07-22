@@ -106,7 +106,7 @@ pub fn simplify(self: *TcCtx, ptr: LevelPtr) LevelPtr {
             }
         },
     };
-    self.expr_cache.simplify_cache.put(util.smp_allocator, ptr, result) catch @panic("oom");
+    self.expr_cache.simplify_cache.put(util.smp_allocator, ptr, result) catch util.oom();
     return result;
 }
 
@@ -119,7 +119,7 @@ pub fn noDupesAllParams(self: *TcCtx, ls: LevelsPtr) bool {
                 if (set.contains(l)) {
                     return false;
                 } else {
-                    set.put(self.arena.child, l, {}) catch @panic("oom");
+                    set.put(self.arena.child, l, {}) catch util.oom();
                 }
             },
             else => return false,
@@ -133,7 +133,7 @@ pub fn substLevels(self: *TcCtx, uparams: LevelsPtr, ks: LevelsPtr, vs: LevelsPt
     var out = std.ArrayList(LevelPtr).empty;
     defer out.deinit(self.arena.child);
     for (src) |l| {
-        out.append(self.arena.child, substLevel(self, l, ks, vs)) catch @panic("oom");
+        out.append(self.arena.child, substLevel(self, l, ks, vs)) catch util.oom();
     }
     return TcCtx.allocLevels(self, out.items);
 }

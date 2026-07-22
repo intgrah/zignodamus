@@ -200,7 +200,7 @@ pub fn checkAllDeclarsSerial(self: *const ExportFile) void {
             }
         }
     };
-    const t = std.Thread.spawn(.{ .stack_size = root.stack_size }, Worker.run, .{self}) catch @panic("oom");
+    const t = std.Thread.spawn(.{ .stack_size = root.stack_size }, Worker.run, .{self}) catch util.oom();
     t.join();
 }
 
@@ -226,8 +226,8 @@ fn checkAllDeclarsPar(self: *const ExportFile, num_threads: usize) void {
             .{ .stack_size = root.stack_size },
             Worker.run,
             .{ self, &task_num },
-        ) catch @panic("oom");
-        handles.append(util.smp_allocator, t) catch @panic("oom");
+        ) catch util.oom();
+        handles.append(util.smp_allocator, t) catch util.oom();
     }
     for (handles.items) |t| {
         t.join();
@@ -532,10 +532,10 @@ pub fn infer(self: *TypeChecker, e: ExprPtr, flag: InferFlag) Reject!ExprPtr {
     };
     switch (flag) {
         .InferOnly => {
-            self.tc_cache.infer_cache_no_check.put(util.smp_allocator, e, r) catch @panic("oom");
+            self.tc_cache.infer_cache_no_check.put(util.smp_allocator, e, r) catch util.oom();
         },
         .Check => {
-            self.tc_cache.infer_cache_check.put(util.smp_allocator, e, r) catch @panic("oom");
+            self.tc_cache.infer_cache_check.put(util.smp_allocator, e, r) catch util.oom();
         },
     }
     return r;
@@ -571,7 +571,7 @@ fn inferApp(self: *TypeChecker, e: ExprPtr, flag: InferFlag) Reject!ExprPtr {
                     const binder_type = expr.inst(self.ctx, p.binder_type, ctx.items);
                     try assertDefEq(self, binder_type, arg_type);
                 }
-                ctx.append(ctx_a, arg) catch @panic("oom");
+                ctx.append(ctx_a, arg) catch util.oom();
                 fun = p.body;
             },
             else => {
@@ -605,7 +605,7 @@ fn inferLambda(self: *TypeChecker, e_in: ExprPtr, flag: InferFlag) Reject!ExprPt
                     _ = try inferSortOf(self, binder_type, flag);
                 }
                 const local = TcCtx.mkDbjLevel(self.ctx, la.binder_name, la.binder_style, binder_type);
-                locals.append(locals_a, local) catch @panic("oom");
+                locals.append(locals_a, local) catch util.oom();
                 e = la.body;
             },
             else => break,
@@ -644,8 +644,8 @@ fn inferPi(self: *TypeChecker, e_in: ExprPtr, flag: InferFlag) Reject!ExprPtr {
             .pi => |p| {
                 const binder_type = expr.inst(self.ctx, p.binder_type, locals.items);
                 const dom_univ = try inferSortOf(self, binder_type, flag);
-                universes.append(universes_a, dom_univ) catch @panic("oom");
-                locals.append(locals_a, TcCtx.mkDbjLevel(self.ctx, p.binder_name, p.binder_style, binder_type)) catch @panic("oom");
+                universes.append(universes_a, dom_univ) catch util.oom();
+                locals.append(locals_a, TcCtx.mkDbjLevel(self.ctx, p.binder_name, p.binder_style, binder_type)) catch util.oom();
                 e = p.body;
             },
             else => break,
@@ -696,7 +696,7 @@ pub fn whnf(self: *TypeChecker, e: ExprPtr) ExprPtr {
         } else if (unfoldDef(self, whnfd)) |next_term| {
             cursor = next_term;
         } else {
-            self.tc_cache.whnf_cache.put(util.smp_allocator, e, whnfd) catch @panic("oom");
+            self.tc_cache.whnf_cache.put(util.smp_allocator, e, whnfd) catch util.oom();
             return whnfd;
         }
     }
@@ -784,7 +784,7 @@ pub fn whnfNoUnfolding(self: *TypeChecker, e: ExprPtr) ExprPtr {
         },
     }
     if (should_cache) {
-        self.tc_cache.whnf_no_unfolding_cache.put(util.smp_allocator, e, eprime) catch @panic("oom");
+        self.tc_cache.whnf_no_unfolding_cache.put(util.smp_allocator, e, eprime) catch util.oom();
     }
     return eprime;
 }

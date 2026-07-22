@@ -111,7 +111,7 @@ fn checkInductiveDeclarChecked(
 
     var recursor_extension = ctor_extension;
     for (recursors.items) |r| {
-        recursor_extension.put(ctx.bump, Declar.info(&r).name, r) catch @panic("oom");
+        recursor_extension.put(ctx.bump, Declar.info(&r).name, r) catch util.oom();
     }
 
     {
@@ -132,7 +132,7 @@ pub fn mkIndTysEnvExt(ctx: *TcCtx, st: *const InductiveCheckState) DeclarMap {
     const is_nested_ = st.nested_to_unspecialized_ty_nofvars.count() != 0;
     var all_ind_names = std.ArrayList(NamePtr).empty;
     for (st.all_inductives_incl_specialized.items) |x| {
-        all_ind_names.append(ctx.bump, x.name) catch @panic("oom");
+        all_ind_names.append(ctx.bump, x.name) catch util.oom();
     }
     const all_ind_names_arc = all_ind_names.items;
     var env_extension = swiss_map.FxIndexMap(NamePtr, Declar).empty;
@@ -146,7 +146,7 @@ pub fn mkIndTysEnvExt(ctx: *TcCtx, st: *const InductiveCheckState) DeclarMap {
             .all_ind_names = all_ind_names_arc,
             .all_ctor_names = ctorNamesArc(ctx, inductive),
         } };
-        env_extension.put(ctx.bump, inductive.name, t) catch @panic("oom");
+        env_extension.put(ctx.bump, inductive.name, t) catch util.oom();
     }
     return env_extension;
 }
@@ -154,7 +154,7 @@ pub fn mkIndTysEnvExt(ctx: *TcCtx, st: *const InductiveCheckState) DeclarMap {
 fn ctorNamesArc(ctx: *TcCtx, inductive: IndTyHeader) []const NamePtr {
     var names = std.ArrayList(NamePtr).empty;
     for (inductive.ctors.items) |x| {
-        names.append(ctx.bump, x.name) catch @panic("oom");
+        names.append(ctx.bump, x.name) catch util.oom();
     }
     return names.items;
 }
@@ -173,7 +173,7 @@ pub fn mkCtorsEnvExt(ctx: *TcCtx, nest_st: *const InductiveCheckState, env_ext_i
                 .num_params = num_params,
                 .num_fields = num_fields,
             } };
-            env_ext.put(ctx.bump, ctor.name, d) catch @panic("oom");
+            env_ext.put(ctx.bump, ctor.name, d) catch util.oom();
         }
     }
     return env_ext;
@@ -245,14 +245,14 @@ pub const CtorHeader = struct {
 
 fn cloneHeader(ctx: *TcCtx, h: IndTyHeader) IndTyHeader {
     var ctors = std.ArrayList(CtorHeader).empty;
-    ctors.appendSlice(ctx.bump, h.ctors.items) catch @panic("oom");
+    ctors.appendSlice(ctx.bump, h.ctors.items) catch util.oom();
     return IndTyHeader{ .name = h.name, .ty = h.ty, .ctors = ctors };
 }
 
 fn cloneHeaders(self: *TypeChecker, hs: std.ArrayList(IndTyHeader)) std.ArrayList(IndTyHeader) {
     var out = std.ArrayList(IndTyHeader).empty;
     for (hs.items) |h| {
-        out.append(self.ctx.bump, cloneHeader(self.ctx, h)) catch @panic("oom");
+        out.append(self.ctx.bump, cloneHeader(self.ctx, h)) catch util.oom();
     }
     return out;
 }
@@ -307,7 +307,7 @@ fn specializeNestedAux(self: *TypeChecker, st: *InductiveCheckState) tc.Reject!v
             const replaced_ctor_wo_params = try replaceAllNested(self, ctor_type_instd, st, &ctor_local_params);
             const replaced_ctor_w_params = expr.abstrPis(self.ctx, ctor_local_params.items, replaced_ctor_wo_params);
             util.assert(!replaced_ctor_w_params.asRef().hasFvars());
-            new_ctors_for_i.append(self.ctx.bump, CtorHeader{ .name = adjusted_ctor.name, .ty = replaced_ctor_w_params }) catch @panic("oom");
+            new_ctors_for_i.append(self.ctx.bump, CtorHeader{ .name = adjusted_ctor.name, .ty = replaced_ctor_w_params }) catch util.oom();
         }
         if (i < st.all_inductives_incl_specialized.items.len) {
             st.all_inductives_incl_specialized.items[i].ctors = new_ctors_for_i;
@@ -322,7 +322,7 @@ fn specializeNestedAux(self: *TypeChecker, st: *InductiveCheckState) tc.Reject!v
         var it = st.nested_to_unspecialized_ty_wfvars.iterator();
         while (it.next()) |entry| {
             const e = expr.abstr(self.ctx, entry.value_ptr.*, st.local_params.items);
-            out.put(self.ctx.bump, entry.key_ptr.*, e) catch @panic("oom");
+            out.put(self.ctx.bump, entry.key_ptr.*, e) catch util.oom();
         }
         break :blk out;
     };
@@ -331,7 +331,7 @@ fn specializeNestedAux(self: *TypeChecker, st: *InductiveCheckState) tc.Reject!v
 fn getLocalParams(self: *TypeChecker, e_in: ExprPtr, num_params: u16) tc.Reject!struct { std.ArrayList(ExprPtr), ExprPtr } {
     var e = e_in;
     var param_locals = std.ArrayList(ExprPtr).empty;
-    param_locals.ensureTotalCapacity(self.ctx.bump, num_params) catch @panic("oom");
+    param_locals.ensureTotalCapacity(self.ctx.bump, num_params) catch util.oom();
     var i: u16 = 0;
     while (i < num_params) : (i += 1) {
         switch (e.asRef().kind) {
@@ -339,7 +339,7 @@ fn getLocalParams(self: *TypeChecker, e_in: ExprPtr, num_params: u16) tc.Reject!
                 const local_ = TcCtx.mkUnique(self.ctx, pi.binder_name, pi.binder_style, pi.binder_type);
                 e = expr.inst(self.ctx, pi.body, &.{local_});
                 e = tc.whnf(self, e);
-                param_locals.append(self.ctx.bump, local_) catch @panic("oom");
+                param_locals.append(self.ctx.bump, local_) catch util.oom();
             },
             else => return tc.reject("exhausted telescope early", .{}),
         }
@@ -372,7 +372,7 @@ fn checkInductiveSpec0th(self: *TypeChecker, uparams: LevelsPtr, st: *InductiveC
             const local_ = TcCtx.mkUnique(self.ctx, pi.binder_name, pi.binder_style, pi.binder_type);
             ind_ty_cursor = expr.inst(self.ctx, pi.body, &.{local_});
             ind_ty_cursor = tc.whnf(self, ind_ty_cursor);
-            indices_locals.append(self.ctx.bump, local_) catch @panic("oom");
+            indices_locals.append(self.ctx.bump, local_) catch util.oom();
         }
         i += 1;
     }
@@ -381,11 +381,11 @@ fn checkInductiveSpec0th(self: *TypeChecker, uparams: LevelsPtr, st: *InductiveC
     const is_zero_ = level.isZero(self.ctx, block_codom);
     const ind_const = TcCtx.mkConst(self.ctx, ind_name, uparams);
 
-    st.local_indices.append(self.ctx.bump, indices_locals) catch @panic("oom");
+    st.local_indices.append(self.ctx.bump, indices_locals) catch util.oom();
     st.block_codom = block_codom;
     st.is_zero = is_zero_;
     st.is_nonzero = is_nonzero_;
-    st.ind_consts.append(self.ctx.bump, ind_const) catch @panic("oom");
+    st.ind_consts.append(self.ctx.bump, ind_const) catch util.oom();
 }
 
 fn checkInductiveSpecsMutual1(self: *TypeChecker, st: *InductiveCheckState, ind: IndTyHeader) tc.Reject!void {
@@ -402,14 +402,14 @@ fn checkInductiveSpecsMutual1(self: *TypeChecker, st: *InductiveCheckState, ind:
             const local_ = TcCtx.mkUnique(self.ctx, pi.binder_name, pi.binder_style, pi.binder_type);
             ind_ty_cursor = expr.inst(self.ctx, pi.body, &.{local_});
             ind_ty_cursor = tc.whnf(self, ind_ty_cursor);
-            indices_locals.append(self.ctx.bump, local_) catch @panic("oom");
+            indices_locals.append(self.ctx.bump, local_) catch util.oom();
         }
         i += 1;
     }
     const codom_level = try tc.ensureSort(self, ind_ty_cursor);
     util.assert(level.eqAntisymm(self.ctx, codom_level, st.block_codom.?));
-    st.local_indices.append(self.ctx.bump, indices_locals) catch @panic("oom");
-    st.ind_consts.append(self.ctx.bump, TcCtx.mkConst(self.ctx, ind.name, st.uparams)) catch @panic("oom");
+    st.local_indices.append(self.ctx.bump, indices_locals) catch util.oom();
+    st.ind_consts.append(self.ctx.bump, TcCtx.mkConst(self.ctx, ind.name, st.uparams)) catch util.oom();
 }
 
 fn checkInductiveSpecs(self: *TypeChecker, st: *InductiveCheckState) tc.Reject!void {
@@ -479,7 +479,7 @@ fn headerOfCtor(t: *const ConstructorData) CtorHeader {
 fn headerOfTy(self: *const TypeChecker, t: *const InductiveData) IndTyHeader {
     var ctors = std.ArrayList(CtorHeader).empty;
     for (t.all_ctor_names) |ctor_name| {
-        ctors.append(self.ctx.bump, headerOfCtor(Env.getConstructor(self.env, ctor_name).?)) catch @panic("oom");
+        ctors.append(self.ctx.bump, headerOfCtor(Env.getConstructor(self.env, ctor_name).?)) catch util.oom();
     }
     return IndTyHeader{ .name = t.info.name, .ty = t.info.ty, .ctors = ctors };
 }
@@ -488,7 +488,7 @@ fn collectUnmodifiedMutuals(self: *const TypeChecker, t_from_file: *const Induct
     var all_inductives = std.ArrayList(IndTyHeader).empty;
     for (t_from_file.all_ind_names) |n| {
         const t = Env.getInductive(self.env, n).?;
-        all_inductives.append(self.ctx.bump, headerOfTy(self, t)) catch @panic("oom");
+        all_inductives.append(self.ctx.bump, headerOfTy(self, t)) catch util.oom();
     }
     return all_inductives;
 }
@@ -559,7 +559,7 @@ fn replaceIfNested(
                 break :blk out;
             };
             const jsprime = expr.replaceParams(self.ctx, js, st.local_params.items, outgoing_param_locals);
-            st.nested_to_unspecialized_ty_wfvars.put(self.ctx.bump, aux_nested_container_name, jsprime) catch @panic("oom");
+            st.nested_to_unspecialized_ty_wfvars.put(self.ctx.bump, aux_nested_container_name, jsprime) catch util.oom();
             if (nested_container_name == i_name) {
                 var f2 = TcCtx.mkConst(self.ctx, aux_nested_container_name, st.uparams);
                 f2 = expr.foldlApps(self.ctx, f2, outgoing_param_locals);
@@ -575,13 +575,13 @@ fn replaceIfNested(
                 var auxj_ctor_type = expr.substExprLevels(self.ctx, j_ctor_info.ty, j_ctor_info.uparams, i_levels);
                 auxj_ctor_type = expr.instForallParams(self.ctx, auxj_ctor_type, @as(usize, nested_container_ty.num_params), args.items);
                 auxj_ctor_type = expr.abstrPis(self.ctx, outgoing_param_locals, auxj_ctor_type);
-                auxj_ctors.append(self.ctx.bump, CtorHeader{ .name = auxj_ctor_name, .ty = auxj_ctor_type }) catch @panic("oom");
+                auxj_ctors.append(self.ctx.bump, CtorHeader{ .name = auxj_ctor_name, .ty = auxj_ctor_type }) catch util.oom();
             }
             st.all_inductives_incl_specialized.append(self.ctx.bump, IndTyHeader{
                 .name = aux_nested_container_name,
                 .ty = nested_container_aux_type,
                 .ctors = auxj_ctors,
-            }) catch @panic("oom");
+            }) catch util.oom();
         }
         return result;
     }
@@ -804,7 +804,7 @@ fn largeElimTestAux(self: *TypeChecker, ctor_type_cursor_in: ExprPtr, rem_params
                     ctor_type_cursor = expr.inst(self.ctx, pi.body, &.{local});
                     const binder_type_level = try tc.ensureInfersAsSort(self, pi.binder_type);
                     if (!level.isZero(self.ctx, binder_type_level)) {
-                        non_prop_ctor_telescope_elems.append(self.ctx.bump, local) catch @panic("oom");
+                        non_prop_ctor_telescope_elems.append(self.ctx.bump, local) catch util.oom();
                     }
                 }
             },
@@ -873,9 +873,9 @@ fn mkElimLevel(self: *TypeChecker, st: *InductiveCheckState) tc.Reject!void {
         const elim_level = TcCtx.param(self.ctx, elim_level_name);
         const rec_levels = blk: {
             var base = std.ArrayList(LevelPtr).empty;
-            base.append(self.ctx.bump, elim_level) catch @panic("oom");
+            base.append(self.ctx.bump, elim_level) catch util.oom();
             for (st.uparams.asRef()) |l| {
-                base.append(self.ctx.bump, l) catch @panic("oom");
+                base.append(self.ctx.bump, l) catch util.oom();
             }
             break :blk TcCtx.allocLevels(self.ctx, base.items);
         };
@@ -906,7 +906,7 @@ fn mkMajors(self: *TypeChecker, st: *InductiveCheckState) void {
         var ty = expr.foldlApps(self.ctx, ind_const, st.local_params.items);
         ty = expr.foldlApps(self.ctx, ty, st.local_indices.items[idx].items);
         const t = TcCtx.str1(self.ctx, "t");
-        st.majors.append(self.ctx.bump, TcCtx.mkUnique(self.ctx, t, BinderStyle.default, ty)) catch @panic("oom");
+        st.majors.append(self.ctx.bump, TcCtx.mkUnique(self.ctx, t, BinderStyle.default, ty)) catch util.oom();
     }
 }
 
@@ -929,7 +929,7 @@ fn mkMotives(self: *TypeChecker, st: *InductiveCheckState) void {
     var i: usize = 0;
     while (i < st.ind_consts.items.len) : (i += 1) {
         const major = st.majors.items[i];
-        st.motives.append(self.ctx.bump, mkMotiveDep(self, st, major, @as(u64, i))) catch @panic("oom");
+        st.motives.append(self.ctx.bump, mkMotiveDep(self, st, major, @as(u64, i))) catch util.oom();
     }
 }
 
@@ -953,7 +953,7 @@ fn handleRecArgsAux(self: *TypeChecker, rec_arg_cursor_in: ExprPtr) tc.Reject!st
         const local = TcCtx.mkUnique(self.ctx, pi.binder_name, pi.binder_style, pi.binder_type);
         rec_arg_cursor = expr.inst(self.ctx, pi.body, &.{local});
         rec_arg_cursor = tc.whnf(self, rec_arg_cursor);
-        xs.append(self.ctx.bump, local) catch @panic("oom");
+        xs.append(self.ctx.bump, local) catch util.oom();
     }
     return .{ rec_arg_cursor, xs };
 }
@@ -982,9 +982,9 @@ fn sepNonrecRecCtorArgs(
         const pi = ctor_type_cursor.asRef().kind.pi;
         const local = TcCtx.mkUnique(self.ctx, pi.binder_name, pi.binder_style, pi.binder_type);
         ctor_type_cursor = expr.inst(self.ctx, pi.body, &.{local});
-        all_args.append(self.ctx.bump, local) catch @panic("oom");
+        all_args.append(self.ctx.bump, local) catch util.oom();
         if ((try isRecArgument(self, st, pi.binder_type)) != null) {
-            rec_args.append(self.ctx.bump, local) catch @panic("oom");
+            rec_args.append(self.ctx.bump, local) catch util.oom();
         }
     }
     return .{ ctor_type_cursor, all_args, rec_args };
@@ -1017,7 +1017,7 @@ fn handleRecArgsMinor(
         v_name = name_mod.appendIndexAfter(self.ctx, v_name, @as(u64, ctor_idx));
         v_name = name_mod.appendIndexAfter(self.ctx, v_name, @as(u64, i));
         const v_i = TcCtx.mkUnique(self.ctx, v_name, BinderStyle.default, v_i_ty);
-        out.append(self.ctx.bump, v_i) catch @panic("oom");
+        out.append(self.ctx.bump, v_i) catch util.oom();
     }
     return out;
 }
@@ -1027,7 +1027,7 @@ fn revSlice(ctx: *TcCtx, s: []const ExprPtr) []const ExprPtr {
     var i: usize = s.len;
     while (i > 0) {
         i -= 1;
-        out.append(ctx.bump, s[i]) catch @panic("oom");
+        out.append(ctx.bump, s[i]) catch util.oom();
     }
     return out.items;
 }
@@ -1062,7 +1062,7 @@ fn mkMinors1group(self: *TypeChecker, st: *const InductiveCheckState, ctors: []c
             },
         };
         const minor = TcCtx.mkUnique(self.ctx, minor_name, BinderStyle.default, minor_type);
-        out.append(self.ctx.bump, minor) catch @panic("oom");
+        out.append(self.ctx.bump, minor) catch util.oom();
     }
     return out;
 }
@@ -1070,7 +1070,7 @@ fn mkMinors1group(self: *TypeChecker, st: *const InductiveCheckState, ctors: []c
 fn mkMinors(self: *TypeChecker, st: *InductiveCheckState) tc.Reject!void {
     util.assert(st.all_inductives_incl_specialized.items.len == st.ind_consts.items.len);
     for (st.all_inductives_incl_specialized.items) |ind_ty| {
-        st.minors.append(self.ctx.bump, try mkMinors1group(self, st, ind_ty.ctors.items)) catch @panic("oom");
+        st.minors.append(self.ctx.bump, try mkMinors1group(self, st, ind_ty.ctors.items)) catch util.oom();
     }
 }
 
@@ -1078,7 +1078,7 @@ fn flatMapMinors(ctx: *TcCtx, st: *const InductiveCheckState) std.ArrayList(Expr
     var out = std.ArrayList(ExprPtr).empty;
     for (st.minors.items) |v| {
         for (v.items) |x| {
-            out.append(ctx.bump, x) catch @panic("oom");
+            out.append(ctx.bump, x) catch util.oom();
         }
     }
     return out;
@@ -1111,7 +1111,7 @@ fn handleRecCtorArgsRecRule(
         const app_rhs = expr.foldlApps(self.ctx, rec_ctor_arg, xs.items);
         app = TcCtx.mkApp(self.ctx, app, app_rhs);
         const v_hd = expr.abstrLambdaTelescope(self.ctx, xs.items, app);
-        out.append(self.ctx.bump, v_hd) catch @panic("oom");
+        out.append(self.ctx.bump, v_hd) catch util.oom();
     }
     return out;
 }
@@ -1151,9 +1151,9 @@ fn mkRecRules(self: *TypeChecker, st: *const InductiveCheckState) tc.Reject!std.
             const this_minor = minors.items[overall_ctor_idx];
             const rec_rule = try mkRecRule1(self, st, ctor, minors.items, this_minor);
             overall_ctor_idx += 1;
-            grp.append(self.ctx.bump, rec_rule) catch @panic("oom");
+            grp.append(self.ctx.bump, rec_rule) catch util.oom();
         }
-        rec_rules.append(self.ctx.bump, grp) catch @panic("oom");
+        rec_rules.append(self.ctx.bump, grp) catch util.oom();
     }
     return rec_rules;
 }
@@ -1257,7 +1257,7 @@ fn mkRecursorAux(
 
     var all_inductives = std.ArrayList(NamePtr).empty;
     for (st.all_inductives_incl_specialized.items) |x| {
-        all_inductives.append(self.ctx.bump, x.name) catch @panic("oom");
+        all_inductives.append(self.ctx.bump, x.name) catch util.oom();
     }
 
     const recursor = RecursorData{
@@ -1299,7 +1299,7 @@ pub fn mkRecursors(self: *TypeChecker, st: *const InductiveCheckState) tc.Reject
             minors.items,
             rec_rules.items[i].items,
         );
-        recursors.append(self.ctx.bump, recursor) catch @panic("oom");
+        recursors.append(self.ctx.bump, recursor) catch util.oom();
     }
     return recursors;
 }
@@ -1323,7 +1323,7 @@ fn mkSpecializedRecToUnspecializedMap(
             unspecialized_rec_name,
             @as(u64, specialized_rec_names_to_unspecialized_rec_names.count() + 1),
         );
-        specialized_rec_names_to_unspecialized_rec_names.put(self.ctx.bump, specialized_rec_name, unspecialized_rec_name) catch @panic("oom");
+        specialized_rec_names_to_unspecialized_rec_names.put(self.ctx.bump, specialized_rec_name, unspecialized_rec_name) catch util.oom();
     }
     return specialized_rec_names_to_unspecialized_rec_names;
 }
@@ -1448,12 +1448,12 @@ fn restoreE(
             .pi => |b| {
                 const local = TcCtx.mkUnique(self.ctx, b.binder_name, b.binder_style, b.binder_type);
                 e = expr.inst(self.ctx, b.body, &.{local});
-                locals.append(self.ctx.bump, local) catch @panic("oom");
+                locals.append(self.ctx.bump, local) catch util.oom();
             },
             .lambda => |b| {
                 const local = TcCtx.mkUnique(self.ctx, b.binder_name, b.binder_style, b.binder_type);
                 e = expr.inst(self.ctx, b.body, &.{local});
-                locals.append(self.ctx.bump, local) catch @panic("oom");
+                locals.append(self.ctx.bump, local) catch util.oom();
             },
             else => return tc.reject("malformed recursor", .{}),
         }
@@ -1480,7 +1480,7 @@ fn restoreRecursor1(
     for (new_env_rec.rec_rules) |rule| {
         const val = try restoreE(self, st, rule.val, specialized_rec_names_to_unspecialized_rec_names);
         const ctor_name = if (rec_name == resolved_rec_name) rule.ctor_name else restoreCtorName(self, st, rule.ctor_name);
-        rules.append(self.ctx.bump, RecRule{ .ctor_name = ctor_name, .ctor_telescope_size_wo_params = rule.ctor_telescope_size_wo_params, .val = val }) catch @panic("oom");
+        rules.append(self.ctx.bump, RecRule{ .ctor_name = ctor_name, .ctor_telescope_size_wo_params = rule.ctor_telescope_size_wo_params, .val = val }) catch util.oom();
     }
     var out = new_env_rec;
     out.info = DeclarInfo{ .name = resolved_rec_name, .ty = restored_ty, .uparams = new_env_rec.info.uparams };

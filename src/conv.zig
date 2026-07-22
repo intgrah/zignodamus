@@ -153,12 +153,12 @@ fn unifyGeneral(self: *TypeChecker, comptime RIGID: bool, depth: u32, x: V, y: V
         }
         const result = unifyNoCache(self, RIGID, depth, x, y);
         if (result) {
-            self.tc_cache.conv_cache.put(util.smp_allocator, cache_key, {}) catch @panic("oom");
+            self.tc_cache.conv_cache.put(util.smp_allocator, cache_key, {}) catch util.oom();
         } else if (RIGID and neg_eligible) {
             if (self.tc_cache.probe_depth == 0) {
-                self.tc_cache.conv_cache_neg.put(util.smp_allocator, cache_key, {}) catch @panic("oom");
+                self.tc_cache.conv_cache_neg.put(util.smp_allocator, cache_key, {}) catch util.oom();
             } else {
-                self.tc_cache.conv_cache_neg_probe.put(util.smp_allocator, cache_key, {}) catch @panic("oom");
+                self.tc_cache.conv_cache_neg_probe.put(util.smp_allocator, cache_key, {}) catch util.oom();
             }
         }
         return result;

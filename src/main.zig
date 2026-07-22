@@ -62,7 +62,17 @@ fn readInput(io: std.Io, gpa: std.mem.Allocator, export_file_path: ?[]const u8) 
     return .{ .mapped = mapped };
 }
 
-pub fn main(init: std.process.Init) !void {
+pub fn main(init: std.process.Init) void {
+    mainInner(init) catch |err| switch (err) {
+        error.ParseFailed => std.process.exit(1),
+        else => {
+            std.debug.print("error: {s}\n", .{@errorName(err)});
+            std.process.exit(2);
+        },
+    };
+}
+
+fn mainInner(init: std.process.Init) !void {
     const io = init.io;
     const gpa = init.gpa;
 
