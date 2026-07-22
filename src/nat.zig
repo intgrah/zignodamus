@@ -54,6 +54,7 @@ pub fn succ(b: BigUint) BigUint {
     return addUsize(b, 1);
 }
 
+/// This is NOT Nat.pred. Nat.pred clamps at zero.
 pub fn pred(b: BigUint) BigUint {
     std.debug.assert(!b.eqlZero());
     var r = BigUint.init(A) catch util.oom();
