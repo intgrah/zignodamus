@@ -379,7 +379,7 @@ fn doNatBin(self: *TypeChecker, x_in: ExprPtr, y_in: ExprPtr, op: NatRed) ?ExprP
         .lor => TcCtx.mkNatLitQuick(self.ctx, nat.lor(arg1, arg2)),
         .xor => TcCtx.mkNatLitQuick(self.ctx, nat.xor(arg1, arg2)),
         .shl => if (nat.shiftLeft(arg1, arg2)) |r| TcCtx.mkNatLitQuick(self.ctx, r) else null,
-        .shr => if (nat.shiftRight(arg1, arg2)) |r| TcCtx.mkNatLitQuick(self.ctx, r) else null,
+        .shr => TcCtx.mkNatLitQuick(self.ctx, nat.shiftRight(arg1, arg2)),
         .beq => expr.boolToExpr(self.ctx, nat.beq(arg1, arg2)),
         .ble => expr.boolToExpr(self.ctx, nat.ble(arg1, arg2)),
     };

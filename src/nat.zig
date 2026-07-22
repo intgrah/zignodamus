@@ -165,8 +165,9 @@ pub fn shiftLeft(x: BigUint, y: BigUint) ?BigUint {
 }
 
 /// Nat.shiftRight
-pub fn shiftRight(x: BigUint, y: BigUint) ?BigUint {
-    const sh = y.toConst().toInt(usize) catch return null;
+pub fn shiftRight(x: BigUint, y: BigUint) BigUint {
+    // If y does not fit in usize, then x >> y is surely zero...
+    const sh = y.toConst().toInt(usize) catch return zero();
     var r = BigUint.init(A) catch util.oom();
     r.shiftRight(&x, sh) catch util.oom();
     return r;

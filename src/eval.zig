@@ -1514,7 +1514,7 @@ fn doNatBinVal(self: *TypeChecker, x: BigUint, y: BigUint, op: NatRed) ?V {
         .lor => return mkNatlitVal(self, nat.lor(x, y)),
         .xor => return mkNatlitVal(self, nat.xor(x, y)),
         .shl => return mkNatlitVal(self, nat.shiftLeft(x, y) orelse return null),
-        .shr => return mkNatlitVal(self, nat.shiftRight(x, y) orelse return null),
+        .shr => return mkNatlitVal(self, nat.shiftRight(x, y)),
         .beq => return boolVal(self, nat.beq(x, y)),
         .ble => return boolVal(self, nat.ble(x, y)),
     }
