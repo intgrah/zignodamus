@@ -1,3 +1,5 @@
+pub const parser = @import("export_file/parser.zig");
+
 const env = @import("env.zig");
 const ptr = @import("ptr.zig");
 const Dag = @import("Dag.zig");

@@ -1,25 +1,25 @@
 const std = @import("std");
-const util = @import("util.zig");
-const Arena = @import("Arena.zig");
-const hash64 = @import("hash.zig").hash64;
-const interner = @import("interner.zig");
-const swiss_map = @import("swiss_map.zig");
-const env = @import("env.zig");
-const expr = @import("expr.zig");
-const level = @import("level.zig");
-const name = @import("name.zig");
+const util = @import("../util.zig");
+const Arena = @import("../Arena.zig");
+const hash64 = @import("../hash.zig").hash64;
+const interner = @import("../interner.zig");
+const swiss_map = @import("../swiss_map.zig");
+const env = @import("../env.zig");
+const expr = @import("../expr.zig");
+const level = @import("../level.zig");
+const name = @import("../name.zig");
 
-const Config = @import("export_file.zig").Config;
-const Dag = @import("Dag.zig");
-const nat = @import("nat.zig");
-const ExportFile = @import("export_file.zig").ExportFile;
+const Config = @import("../export_file.zig").Config;
+const Dag = @import("../Dag.zig");
+const nat = @import("../nat.zig");
+const ExportFile = @import("../export_file.zig").ExportFile;
 
-const NamePtr = @import("ptr.zig").NamePtr;
-const LevelPtr = @import("ptr.zig").LevelPtr;
-const LevelsPtr = @import("ptr.zig").LevelsPtr;
-const ExprPtr = @import("ptr.zig").ExprPtr;
-const StringPtr = @import("ptr.zig").StringPtr;
-const BigUintPtr = @import("ptr.zig").BigUintPtr;
+const NamePtr = @import("../ptr.zig").NamePtr;
+const LevelPtr = @import("../ptr.zig").LevelPtr;
+const LevelsPtr = @import("../ptr.zig").LevelsPtr;
+const ExprPtr = @import("../ptr.zig").ExprPtr;
+const StringPtr = @import("../ptr.zig").StringPtr;
+const BigUintPtr = @import("../ptr.zig").BigUintPtr;
 
 const name_nil: NamePtr = @enumFromInt(0);
 const level_nil: LevelPtr = @enumFromInt(0);

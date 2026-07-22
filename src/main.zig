@@ -7,7 +7,7 @@ const clap = @import("clap");
 const zignodamus = @import("zignodamus");
 const util = zignodamus.util;
 const Config = zignodamus.export_file.Config;
-const parser = zignodamus.parser;
+const parser = zignodamus.export_file.parser;
 const tc = zignodamus.tc;
 
 const params = clap.parseParamsComptime(

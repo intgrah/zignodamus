@@ -15,7 +15,6 @@ pub const interner = @import("interner.zig");
 pub const level = @import("level.zig");
 pub const name = @import("name.zig");
 pub const nat = @import("nat.zig");
-pub const parser = @import("parser.zig");
 pub const ptr = @import("ptr.zig");
 pub const quot = @import("quot.zig");
 pub const swiss_map = @import("swiss_map.zig");
@@ -36,6 +35,7 @@ test {
         env,
         eval,
         export_file,
+        export_file.parser,
         expr,
         hash,
         inductive,
@@ -43,7 +43,6 @@ test {
         level,
         name,
         nat,
-        parser,
         ptr,
         quot,
         swiss_map,
