@@ -2,7 +2,7 @@ const std = @import("std");
 const FxContext = @import("hash.zig").FxContext;
 const util = @import("util.zig");
 
-const UFNode = struct {
+const Node = struct {
     parent: usize,
     rank: usize,
 };
@@ -13,7 +13,7 @@ pub fn UnionFind(comptime A: type) type {
 
         const Entry = struct {
             key: A,
-            node: UFNode,
+            node: Node,
         };
 
         const IndexMap = std.HashMapUnmanaged(A, usize, FxContext(A), 80);
