@@ -4,7 +4,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const mod = b.addModule("just_another_kernel", .{
+    const mod = b.addModule("zignodamus", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .link_libc = true,
@@ -13,14 +13,14 @@ pub fn build(b: *std.Build) void {
     const clap = b.dependency("clap", .{});
 
     const exe = b.addExecutable(.{
-        .name = "just_another_kernel",
+        .name = "zignodamus",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
             .link_libc = true,
             .imports = &.{
-                .{ .name = "just_another_kernel", .module = mod },
+                .{ .name = "zignodamus", .module = mod },
                 .{ .name = "clap", .module = clap.module("clap") },
             },
         }),

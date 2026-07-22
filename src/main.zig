@@ -4,11 +4,11 @@ const M_MMAP_THRESHOLD: c_int = -3;
 const M_ARENA_MAX: c_int = -8;
 extern fn mallopt(param: c_int, value: c_int) c_int;
 const clap = @import("clap");
-const jak = @import("just_another_kernel");
-const util = jak.util;
-const Config = jak.export_file.Config;
-const parser = jak.parser;
-const tc = jak.tc;
+const zignodamus = @import("zignodamus");
+const util = zignodamus.util;
+const Config = zignodamus.export_file.Config;
+const parser = zignodamus.parser;
+const tc = zignodamus.tc;
 
 const params = clap.parseParamsComptime(
     \\-h, --help                            Display this help and exit.
@@ -139,7 +139,7 @@ fn mainInner(init: std.process.Init) !void {
 
     const input = try readInput(io, gpa, export_file_path);
     errdefer input.release(gpa);
-    var global_arena = jak.Arena.init(util.smp_allocator);
+    var global_arena = zignodamus.Arena.init(util.smp_allocator);
     defer global_arena.deinit();
 
     const export_file, const skipped_axioms = try parser.parseExportFile(&global_arena, input.bytes(), config);

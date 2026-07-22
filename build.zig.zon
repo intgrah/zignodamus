@@ -1,7 +1,7 @@
 .{
-    .name = .just_another_kernel,
+    .name = .zignodamus,
     .version = "0.0.0",
-    .fingerprint = 0xf5ad2e2338471579,
+    .fingerprint = 0x3e47dde0e1d7b553,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .clap = .{
