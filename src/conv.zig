@@ -1,5 +1,5 @@
 const env_mod = @import("env.zig");
-const num_bigint = @import("big_uint.zig");
+const nat = @import("nat.zig");
 const tc = @import("tc.zig");
 const util = @import("util.zig");
 const value = @import("value.zig");
@@ -768,7 +768,7 @@ fn valueNatPred(self: *TypeChecker, v: V) ?V {
             if (n.eqlZero()) {
                 return null;
             }
-            const pred = TcCtx.allocBignum(self.ctx, num_bigint.subU8(n, 1)) orelse return null;
+            const pred = TcCtx.allocBignum(self.ctx, nat.pred(n)) orelse return null;
             return value.mkNatlit(self.arena, pred);
         },
         else => return null,

@@ -11,7 +11,7 @@ const name = @import("name.zig");
 
 const Config = @import("export_file.zig").Config;
 const Dag = @import("Dag.zig");
-const BigUint = @import("big_uint.zig").BigUint;
+const nat = @import("nat.zig");
 const ExportFile = @import("export_file.zig").ExportFile;
 
 const NamePtr = @import("ptr.zig").NamePtr;
@@ -717,8 +717,7 @@ fn doNatVal(self: *Parser, idx: BackRef, s: []const u8) ParseError!void {
     if (!self.config.nat_extension) {
         return fail("Nat lit extension disallowed by checker execution config, but export file contains a nat literal");
     }
-    var big = BigUint.init(std.heap.smp_allocator) catch util.oom();
-    big.setString(10, s) catch return fail("invalid BigUint decimal string");
+    const big = nat.fromDecimal(s) orelse return fail("invalid BigUint decimal string");
     const num_ptr = BigUintPtr.global(self.dag.bignums.?.intern(self.arena, big));
     const hash = hash64(.{ expr.nat_lit_hash, num_ptr });
     pushExpr(self, idx, Expr{ .hash = hash, .kind = .{ .nat_lit = .{ .ptr = num_ptr } } });

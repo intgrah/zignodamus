@@ -8,7 +8,6 @@ const inductive = @import("inductive.zig");
 const quot = @import("quot.zig");
 const util = @import("util.zig");
 const value = @import("value.zig");
-const num_bigint = @import("big_uint.zig");
 const root = @import("root.zig");
 const nat = @import("nat.zig");
 const swiss_map = @import("swiss_map.zig");
@@ -364,25 +363,25 @@ fn doNatBin(self: *TypeChecker, x_in: ExprPtr, y_in: ExprPtr, op: NatRed) ?ExprP
     const x = whnf(self, x_in);
     const y = whnf(self, y_in);
     const arg1 = expr.getBignumFromExpr(self.ctx, x) orelse return null;
-    defer num_bigint.free(arg1);
+    defer nat.free(arg1);
     const arg2 = expr.getBignumFromExpr(self.ctx, y) orelse return null;
-    defer num_bigint.free(arg2);
+    defer nat.free(arg2);
     return switch (op) {
         .succ, .div_go, .mod_core_go => unreachable,
-        .add => TcCtx.mkNatLitQuick(self.ctx, nat.natAdd(arg1, arg2)),
-        .sub => TcCtx.mkNatLitQuick(self.ctx, nat.natSub(arg1, arg2)),
-        .mul => TcCtx.mkNatLitQuick(self.ctx, nat.natMul(arg1, arg2)),
-        .pow => if (nat.natPow(arg1, arg2)) |r| TcCtx.mkNatLitQuick(self.ctx, r) else null,
-        .div => TcCtx.mkNatLitQuick(self.ctx, nat.natDiv(arg1, arg2)),
-        .mod => TcCtx.mkNatLitQuick(self.ctx, nat.natMod(arg1, arg2)),
-        .gcd => TcCtx.mkNatLitQuick(self.ctx, nat.natGcd(&arg1, &arg2)),
-        .land => TcCtx.mkNatLitQuick(self.ctx, nat.natLand(arg1, arg2)),
-        .lor => TcCtx.mkNatLitQuick(self.ctx, nat.natLor(arg1, arg2)),
-        .xor => TcCtx.mkNatLitQuick(self.ctx, nat.natXor(&arg1, &arg2)),
-        .shl => if (nat.natShl(arg1, arg2)) |r| TcCtx.mkNatLitQuick(self.ctx, r) else null,
-        .shr => if (nat.natShr(arg1, arg2)) |r| TcCtx.mkNatLitQuick(self.ctx, r) else null,
-        .beq => expr.boolToExpr(self.ctx, nat.natEq(arg1, arg2)),
-        .ble => expr.boolToExpr(self.ctx, nat.natLe(arg1, arg2)),
+        .add => TcCtx.mkNatLitQuick(self.ctx, nat.add(arg1, arg2)),
+        .sub => TcCtx.mkNatLitQuick(self.ctx, nat.sub(arg1, arg2)),
+        .mul => TcCtx.mkNatLitQuick(self.ctx, nat.mul(arg1, arg2)),
+        .pow => if (nat.pow(arg1, arg2)) |r| TcCtx.mkNatLitQuick(self.ctx, r) else null,
+        .div => TcCtx.mkNatLitQuick(self.ctx, nat.div(arg1, arg2)),
+        .mod => TcCtx.mkNatLitQuick(self.ctx, nat.mod(arg1, arg2)),
+        .gcd => TcCtx.mkNatLitQuick(self.ctx, nat.gcd(arg1, arg2)),
+        .land => TcCtx.mkNatLitQuick(self.ctx, nat.land(arg1, arg2)),
+        .lor => TcCtx.mkNatLitQuick(self.ctx, nat.lor(arg1, arg2)),
+        .xor => TcCtx.mkNatLitQuick(self.ctx, nat.xor(arg1, arg2)),
+        .shl => if (nat.shiftLeft(arg1, arg2)) |r| TcCtx.mkNatLitQuick(self.ctx, r) else null,
+        .shr => if (nat.shiftRight(arg1, arg2)) |r| TcCtx.mkNatLitQuick(self.ctx, r) else null,
+        .beq => expr.boolToExpr(self.ctx, nat.beq(arg1, arg2)),
+        .ble => expr.boolToExpr(self.ctx, nat.ble(arg1, arg2)),
     };
 }
 

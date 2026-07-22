@@ -4,7 +4,7 @@ const level = @import("level.zig");
 const name = @import("name.zig");
 const env = @import("env.zig");
 const value = @import("value.zig");
-const num_bigint = @import("big_uint.zig");
+const nat = @import("nat.zig");
 const expr = @This();
 
 const TcCtx = @import("TcCtx.zig");
@@ -502,10 +502,10 @@ pub fn applyLambda(self: *TcCtx, binder: ExprPtr, body_in: ExprPtr) ExprPtr {
 pub fn natLitToConstructor(self: *TcCtx, n_ptr: BigUintPtr) ?ExprPtr {
     util.assert(self.export_file.config.nat_extension);
     const n = n_ptr.asRef();
-    if (num_bigint.isZero(n.*)) {
+    if (n.eqlZero()) {
         return expr.cNatZero(self);
     } else {
-        const pred_num = num_bigint.subU8(n.*, 1);
+        const pred_num = nat.pred(n.*);
         const pred_ptr = TcCtx.allocBignum(self, pred_num).?;
         const pred = TcCtx.mkNatLit(self, pred_ptr).?;
         const succ_c = expr.cNatSucc(self) orelse return null;
@@ -542,7 +542,7 @@ pub fn strLitToConstructor(self: *TcCtx, s: StringPtr) ?ExprPtr {
     while (i > 0) {
         i -= 1;
         const c = codepoints.items[i];
-        const bignum_ptr = TcCtx.allocBignum(self, num_bigint.fromU32(@as(u32, c))).?;
+        const bignum_ptr = TcCtx.allocBignum(self, nat.fromU32(@as(u32, c))).?;
         const bignum = TcCtx.mkNatLit(self, bignum_ptr).?;
         const x = TcCtx.mkApp(self, c_char_of_nat, bignum);
         const y = TcCtx.mkApp(self, c_list_cons_char, x);
@@ -552,14 +552,14 @@ pub fn strLitToConstructor(self: *TcCtx, s: StringPtr) ?ExprPtr {
     return TcCtx.mkApp(self, string_of_list_const, out);
 }
 
-pub fn getBignumFromExpr(self: *TcCtx, e: ExprPtr) ?num_bigint.BigUint {
+pub fn getBignumFromExpr(self: *TcCtx, e: ExprPtr) ?nat.BigUint {
     switch (e.asRef().kind) {
         .nat_lit => |x| {
-            return num_bigint.clone(x.ptr.asRef());
+            return nat.clone(x.ptr.asRef());
         },
         else => {
             if (eqOpt(expr.cNatZero(self), e)) {
-                return num_bigint.zero();
+                return nat.zero();
             } else {
                 return null;
             }
@@ -570,11 +570,11 @@ pub fn getBignumFromExpr(self: *TcCtx, e: ExprPtr) ?num_bigint.BigUint {
 pub fn getBignumSuccFromExpr(self: *TcCtx, e: ExprPtr) ?ExprPtr {
     switch (e.asRef().kind) {
         .nat_lit => |x| {
-            return TcCtx.mkNatLitQuick(self, num_bigint.addUsize(x.ptr.asRef().*, 1));
+            return TcCtx.mkNatLitQuick(self, nat.succ(x.ptr.asRef().*));
         },
         else => {
             if (eqOpt(expr.cNatZero(self), e)) {
-                return TcCtx.mkNatLitQuick(self, num_bigint.addUsize(num_bigint.zero(), 1));
+                return TcCtx.mkNatLitQuick(self, nat.fromUsize(1));
             } else {
                 return null;
             }

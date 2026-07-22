@@ -1,7 +1,7 @@
 const expr = @import("expr.zig");
 const level = @import("level.zig");
 const name = @import("name.zig");
-const BigUint = @import("big_uint.zig").BigUint;
+const BigUint = @import("nat.zig").BigUint;
 
 pub const ptr_tag: usize = 1 << 56;
 

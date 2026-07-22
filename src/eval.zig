@@ -1,6 +1,5 @@
 const std = @import("std");
 const conv = @import("conv.zig");
-const num_bigint = @import("big_uint.zig");
 const level_mod = @import("level.zig");
 const env = @import("env.zig");
 const expr = @import("expr.zig");
@@ -17,15 +16,6 @@ const TypeChecker = tc.TypeChecker;
 const TcCtx = @import("TcCtx.zig");
 const NatRed = @import("Dag.zig").NatRed;
 const nat = @import("nat.zig");
-const natDiv = nat.natDiv;
-const natGcd = nat.natGcd;
-const natLand = nat.natLand;
-const natLor = nat.natLor;
-const natMod = nat.natMod;
-const natShl = nat.natShl;
-const natShr = nat.natShr;
-const natSub = nat.natSub;
-const natXor = nat.natXor;
 const BigUintPtr = @import("ptr.zig").BigUintPtr;
 const ExprPtr = @import("ptr.zig").ExprPtr;
 const LevelPtr = @import("ptr.zig").LevelPtr;
@@ -37,7 +27,7 @@ const Elim = value.Elim;
 const RigidHead = value.RigidHead;
 const Spine = value.Spine;
 const Value = value.Value;
-const BigUint = @import("big_uint.zig").BigUint;
+const BigUint = nat.BigUint;
 const OnceCell = util.OnceCell;
 const E = value.E;
 const S = value.S;
@@ -558,8 +548,8 @@ fn tryFireRigid(self: *TypeChecker, depth: u32, head: RigidHead, spine: S) V {
                 if (spine != &Spine.empty and spine.prev == &Spine.empty and spine.elim.isApp()) {
                     const arg = spine.elim.appV();
                     if (valueToBignumAt(self, depth, arg, false)) |n| {
-                        defer num_bigint.free(n);
-                        const succ_lit = num_bigint.addUsize(n, 1);
+                        defer nat.free(n);
+                        const succ_lit = nat.succ(n);
                         if (TcCtx.allocBignum(self.ctx, succ_lit)) |p| {
                             return value.mkNatlit(self.arena, p);
                         }
@@ -1230,8 +1220,8 @@ fn natRecNatlit(
     rec: *const RecursorData,
     levels: LevelsPtr,
 ) V {
-    const n = n_ptr.asRef().clone() catch util.oom();
-    defer num_bigint.free(n);
+    const n = nat.clone(n_ptr.asRef());
+    defer nat.free(n);
     const nparams = @as(usize, rec.num_params);
     const nmotives = @as(usize, rec.num_motives);
     const major_idx = rec.majorIdx();
@@ -1240,7 +1230,7 @@ fn natRecNatlit(
     var result = if (n.eqlZero())
         zero_case
     else blk: {
-        const pred = num_bigint.subU8(n, 1);
+        const pred = nat.pred(n);
         const pred_ptr = TcCtx.allocBignum(self.ctx, pred) orelse @panic("nat_rec_natlit: alloc pred");
         const pred_val = value.mkNatlit(self.arena, pred_ptr);
         const empty = value.spineEmpty();
@@ -1392,15 +1382,15 @@ fn natLitToCtorVal(self: *TypeChecker, depth: u32, n: BigUintPtr) ?V {
     if (!self.ctx.export_file.config.nat_extension) {
         return null;
     }
-    const nv = n.asRef().clone() catch util.oom();
-    defer num_bigint.free(nv);
+    const nv = nat.clone(n.asRef());
+    defer nat.free(nv);
     const levels = TcCtx.allocLevels(self.ctx, &.{});
     const empty = value.spineEmpty();
     if (nv.eqlZero()) {
         const zero_name = self.ctx.export_file.name_cache.nat_zero orelse return null;
         return value.mkRigidHeadWithEmpty(self.arena, RigidHead{ .ctor = .{ .name = zero_name, .levels = levels } }, empty);
     } else {
-        const pred = TcCtx.allocBignum(self.ctx, num_bigint.subU8(nv, 1)) orelse return null;
+        const pred = TcCtx.allocBignum(self.ctx, nat.pred(nv)) orelse return null;
         const pred_v = value.mkNatlit(self.arena, pred);
         const succ_name = self.ctx.export_file.name_cache.nat_succ orelse return null;
         const succ_v = value.mkRigidHeadWithEmpty(self.arena, RigidHead{ .ctor = .{ .name = succ_name, .levels = levels } }, empty);
@@ -1488,8 +1478,8 @@ fn doNatRedAt(self: *TypeChecker, depth: u32, name: NamePtr, args: []const V, de
         .succ => {
             if (args.len != 1) return null;
             const n = valueToBignumAt(self, depth, args[0], deep) orelse return null;
-            defer num_bigint.free(n);
-            return mkNatlitVal(self, num_bigint.addUsize(n, 1));
+            defer nat.free(n);
+            return mkNatlitVal(self, nat.succ(n));
         },
         .div_go, .mod_core_go => {
             if (args.len != 5) return null;
@@ -1508,25 +1498,25 @@ fn doNatRedAt(self: *TypeChecker, depth: u32, name: NamePtr, args: []const V, de
 
 fn doNatBinVal(self: *TypeChecker, x: BigUint, y: BigUint, op: NatRed) ?V {
     defer {
-        num_bigint.free(x);
-        num_bigint.free(y);
+        nat.free(x);
+        nat.free(y);
     }
     switch (op) {
         .succ, .div_go, .mod_core_go => unreachable,
-        .add => return mkNatlitVal(self, nat.natAdd(x, y)),
-        .sub => return mkNatlitVal(self, natSub(x, y)),
-        .mul => return mkNatlitVal(self, nat.natMul(x, y)),
-        .pow => return mkNatlitVal(self, nat.natPow(x, y) orelse return null),
-        .div => return mkNatlitVal(self, natDiv(x, y)),
-        .mod => return mkNatlitVal(self, natMod(x, y)),
-        .gcd => return mkNatlitVal(self, natGcd(&x, &y)),
-        .land => return mkNatlitVal(self, natLand(x, y)),
-        .lor => return mkNatlitVal(self, natLor(x, y)),
-        .xor => return mkNatlitVal(self, natXor(&x, &y)),
-        .shl => return mkNatlitVal(self, natShl(x, y) orelse return null),
-        .shr => return mkNatlitVal(self, natShr(x, y) orelse return null),
-        .beq => return boolVal(self, x.eql(y)),
-        .ble => return boolVal(self, x.order(y) != .gt),
+        .add => return mkNatlitVal(self, nat.add(x, y)),
+        .sub => return mkNatlitVal(self, nat.sub(x, y)),
+        .mul => return mkNatlitVal(self, nat.mul(x, y)),
+        .pow => return mkNatlitVal(self, nat.pow(x, y) orelse return null),
+        .div => return mkNatlitVal(self, nat.div(x, y)),
+        .mod => return mkNatlitVal(self, nat.mod(x, y)),
+        .gcd => return mkNatlitVal(self, nat.gcd(x, y)),
+        .land => return mkNatlitVal(self, nat.land(x, y)),
+        .lor => return mkNatlitVal(self, nat.lor(x, y)),
+        .xor => return mkNatlitVal(self, nat.xor(x, y)),
+        .shl => return mkNatlitVal(self, nat.shiftLeft(x, y) orelse return null),
+        .shr => return mkNatlitVal(self, nat.shiftRight(x, y) orelse return null),
+        .beq => return boolVal(self, nat.beq(x, y)),
+        .ble => return boolVal(self, nat.ble(x, y)),
     }
 }
 
@@ -1588,15 +1578,15 @@ fn valueToBignumAt(self: *TypeChecker, depth: u32, v: V, deep: bool) ?BigUint {
         switch (cur.*) {
             .nat_lit => |n| {
                 const bn = n.ptr.asRef();
-                if (succs == 0) return num_bigint.clone(bn);
-                const c = num_bigint.clone(bn);
-                defer num_bigint.free(c);
-                return num_bigint.addUsize(c, succs);
+                if (succs == 0) return nat.clone(bn);
+                const c = nat.clone(bn);
+                defer nat.free(c);
+                return nat.addUsize(c, succs);
             },
             .rigid => |r| switch (r.head) {
                 .ctor => |ct| {
                     if (eqOpt(self.ctx.export_file.name_cache.nat_zero, ct.name) and r.spine.isEmpty()) {
-                        return num_bigint.fromUsize(succs);
+                        return nat.fromUsize(succs);
                     }
                     if (eqOpt(self.ctx.export_file.name_cache.nat_succ, ct.name)) {
                         if (r.spine != &Spine.empty and r.spine.prev == &Spine.empty and r.spine.elim.isApp()) {
@@ -1613,8 +1603,8 @@ fn valueToBignumAt(self: *TypeChecker, depth: u32, v: V, deep: bool) ?BigUint {
                     }
                     const bn = bignumViaForce(self, depth, cur) orelse return null;
                     if (succs == 0) return bn;
-                    defer num_bigint.free(bn);
-                    return num_bigint.addUsize(bn, succs);
+                    defer nat.free(bn);
+                    return nat.addUsize(bn, succs);
                 },
                 else => return null,
             },
@@ -1622,10 +1612,10 @@ fn valueToBignumAt(self: *TypeChecker, depth: u32, v: V, deep: bool) ?BigUint {
                 if (u.head_value.get()) |hv| {
                     if (hv.* == .nat_lit) {
                         const bn = hv.nat_lit.ptr.asRef();
-                        if (succs == 0) return num_bigint.clone(bn);
-                        const c = num_bigint.clone(bn);
-                        defer num_bigint.free(c);
-                        return num_bigint.addUsize(c, succs);
+                        if (succs == 0) return nat.clone(bn);
+                        const c = nat.clone(bn);
+                        defer nat.free(c);
+                        return nat.addUsize(c, succs);
                     }
                 }
                 if (!deep) {
@@ -1633,8 +1623,8 @@ fn valueToBignumAt(self: *TypeChecker, depth: u32, v: V, deep: bool) ?BigUint {
                 }
                 const bn = bignumViaForce(self, depth, cur) orelse return null;
                 if (succs == 0) return bn;
-                defer num_bigint.free(bn);
-                return num_bigint.addUsize(bn, succs);
+                defer nat.free(bn);
+                return nat.addUsize(bn, succs);
             },
             else => return null,
         }
@@ -1648,7 +1638,7 @@ fn bignumViaForce(self: *TypeChecker, depth: u32, v: V) ?BigUint {
     const f = forceAll(self, depth, v);
     switch (f.*) {
         .nat_lit => |n| {
-            return num_bigint.clone(n.ptr.asRef());
+            return nat.clone(n.ptr.asRef());
         },
         .rigid => |r| switch (r.head) {
             .ctor => |ct| {

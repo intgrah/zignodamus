@@ -6,7 +6,7 @@ const name = @import("name.zig");
 const ptr = @import("ptr.zig");
 const util = @import("util.zig");
 const FxHasher = @import("hash.zig").FxHasher;
-const BigUint = @import("big_uint.zig").BigUint;
+const BigUint = @import("nat.zig").BigUint;
 const LevelPtr = ptr.LevelPtr;
 const smp_allocator = util.smp_allocator;
 

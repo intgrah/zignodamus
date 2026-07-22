@@ -1,112 +1,172 @@
 const std = @import("std");
 const util = @import("util.zig");
-const BigUint = @import("big_uint.zig").BigUint;
-const smp_allocator = util.smp_allocator;
 
-pub fn natAdd(x: BigUint, y: BigUint) BigUint {
-    var mx = x;
-    var my = y;
-    var r = BigUint.init(smp_allocator) catch util.oom();
-    r.add(&mx, &my) catch util.oom();
+const A = util.smp_allocator;
+
+pub const BigUint = std.math.big.int.Managed;
+
+pub fn fromU32(n: u32) BigUint {
+    var r = BigUint.init(A) catch util.oom();
+    r.set(n) catch util.oom();
     return r;
 }
 
-pub fn natMul(x: BigUint, y: BigUint) BigUint {
-    var mx = x;
-    var my = y;
-    var r = BigUint.init(smp_allocator) catch util.oom();
-    r.mul(&mx, &my) catch util.oom();
+pub fn fromUsize(n: usize) BigUint {
+    var r = BigUint.init(A) catch util.oom();
+    r.set(n) catch util.oom();
     return r;
 }
 
-pub fn natPow(x: BigUint, y: BigUint) ?BigUint {
-    var mx = x;
-    var my = y;
-    const e = my.toConst().toInt(u32) catch return null;
-    var r = BigUint.init(smp_allocator) catch util.oom();
-    r.pow(&mx, e) catch util.oom();
+pub fn fromDecimal(s: []const u8) ?BigUint {
+    var r = BigUint.init(A) catch util.oom();
+    r.setString(10, s) catch |e| switch (e) {
+        error.OutOfMemory => util.oom(),
+        else => {
+            r.deinit();
+            return null;
+        },
+    };
     return r;
 }
 
-pub fn natEq(x: BigUint, y: BigUint) bool {
-    var mx = x;
-    return mx.eql(y);
+pub fn clone(b: *const BigUint) BigUint {
+    return b.cloneWithDifferentAllocator(A) catch util.oom();
 }
 
-pub fn natLe(x: BigUint, y: BigUint) bool {
-    var mx = x;
-    return mx.order(y) != .gt;
+pub fn free(n: BigUint) void {
+    var m = n;
+    m.deinit();
 }
 
-pub fn natSub(x: BigUint, y: BigUint) BigUint {
+pub fn addUsize(b: BigUint, n: usize) BigUint {
+    var r = BigUint.init(A) catch util.oom();
+    r.addScalar(&b, n) catch util.oom();
+    return r;
+}
+
+/// Nat.zero
+pub fn zero() BigUint {
+    return BigUint.init(A) catch util.oom();
+}
+
+/// Nat.succ
+pub fn succ(b: BigUint) BigUint {
+    return addUsize(b, 1);
+}
+
+pub fn pred(b: BigUint) BigUint {
+    std.debug.assert(!b.eqlZero());
+    var r = BigUint.init(A) catch util.oom();
+    r.addScalar(&b, -1) catch util.oom();
+    return r;
+}
+
+/// Nat.add
+pub fn add(x: BigUint, y: BigUint) BigUint {
+    var r = BigUint.init(A) catch util.oom();
+    r.add(&x, &y) catch util.oom();
+    return r;
+}
+
+/// Nat.sub
+pub fn sub(x: BigUint, y: BigUint) BigUint {
     if (y.order(x) == .gt) {
-        return bigZero();
+        return zero();
     }
-    var r = BigUint.init(std.heap.smp_allocator) catch util.oom();
+    var r = BigUint.init(A) catch util.oom();
     r.sub(&x, &y) catch util.oom();
     return r;
 }
 
-pub fn natDiv(x: BigUint, y: BigUint) BigUint {
+/// Nat.mul
+pub fn mul(x: BigUint, y: BigUint) BigUint {
+    var r = BigUint.init(A) catch util.oom();
+    r.mul(&x, &y) catch util.oom();
+    return r;
+}
+
+/// Nat.pow
+pub fn pow(x: BigUint, y: BigUint) ?BigUint {
+    const e = y.toConst().toInt(u32) catch return null;
+    var r = BigUint.init(A) catch util.oom();
+    r.pow(&x, e) catch util.oom();
+    return r;
+}
+
+/// Nat.div
+pub fn div(x: BigUint, y: BigUint) BigUint {
     if (y.eqlZero()) {
-        return bigZero();
+        return zero();
     }
-    var q = BigUint.init(std.heap.smp_allocator) catch util.oom();
-    var rem = BigUint.init(std.heap.smp_allocator) catch util.oom();
+    var q = BigUint.init(A) catch util.oom();
+    var rem = BigUint.init(A) catch util.oom();
     q.divFloor(&rem, &x, &y) catch util.oom();
     rem.deinit();
     return q;
 }
 
-pub fn natMod(x: BigUint, y: BigUint) BigUint {
+/// Nat.mod
+pub fn mod(x: BigUint, y: BigUint) BigUint {
     if (y.eqlZero()) {
-        return x.clone() catch util.oom();
+        return clone(&x);
     }
-    var q = BigUint.init(std.heap.smp_allocator) catch util.oom();
-    var rem = BigUint.init(std.heap.smp_allocator) catch util.oom();
+    var q = BigUint.init(A) catch util.oom();
+    var rem = BigUint.init(A) catch util.oom();
     q.divFloor(&rem, &x, &y) catch util.oom();
     q.deinit();
     return rem;
 }
 
-pub fn natGcd(x: *const BigUint, y: *const BigUint) BigUint {
-    var r = BigUint.init(std.heap.smp_allocator) catch util.oom();
-    r.gcd(x, y) catch util.oom();
+/// Nat.gcd
+pub fn gcd(x: BigUint, y: BigUint) BigUint {
+    var r = BigUint.init(A) catch util.oom();
+    r.gcd(&x, &y) catch util.oom();
     return r;
 }
 
-pub fn natXor(x: *const BigUint, y: *const BigUint) BigUint {
-    var r = BigUint.init(std.heap.smp_allocator) catch util.oom();
-    r.bitXor(x, y) catch util.oom();
-    return r;
+/// Nat.beq
+pub fn beq(x: BigUint, y: BigUint) bool {
+    return x.eql(y);
 }
 
-pub fn natShl(x: BigUint, y: BigUint) ?BigUint {
-    const sh = y.toConst().toInt(usize) catch return null;
-    var r = BigUint.init(std.heap.smp_allocator) catch util.oom();
-    r.shiftLeft(&x, sh) catch util.oom();
-    return r;
+/// Nat.ble
+pub fn ble(x: BigUint, y: BigUint) bool {
+    return x.order(y) != .gt;
 }
 
-pub fn natShr(x: BigUint, y: BigUint) ?BigUint {
-    const sh = y.toConst().toInt(usize) catch return null;
-    var r = BigUint.init(std.heap.smp_allocator) catch util.oom();
-    r.shiftRight(&x, sh) catch util.oom();
-    return r;
-}
-
-pub fn natLand(x: BigUint, y: BigUint) BigUint {
-    var r = BigUint.init(std.heap.smp_allocator) catch util.oom();
+/// Nat.land
+pub fn land(x: BigUint, y: BigUint) BigUint {
+    var r = BigUint.init(A) catch util.oom();
     r.bitAnd(&x, &y) catch util.oom();
     return r;
 }
 
-pub fn natLor(x: BigUint, y: BigUint) BigUint {
-    var r = BigUint.init(std.heap.smp_allocator) catch util.oom();
+/// Nat.lor
+pub fn lor(x: BigUint, y: BigUint) BigUint {
+    var r = BigUint.init(A) catch util.oom();
     r.bitOr(&x, &y) catch util.oom();
     return r;
 }
 
-fn bigZero() BigUint {
-    return BigUint.init(std.heap.smp_allocator) catch util.oom();
+/// Nat.xor
+pub fn xor(x: BigUint, y: BigUint) BigUint {
+    var r = BigUint.init(A) catch util.oom();
+    r.bitXor(&x, &y) catch util.oom();
+    return r;
+}
+
+/// Nat.shiftLeft
+pub fn shiftLeft(x: BigUint, y: BigUint) ?BigUint {
+    const sh = y.toConst().toInt(usize) catch return null;
+    var r = BigUint.init(A) catch util.oom();
+    r.shiftLeft(&x, sh) catch util.oom();
+    return r;
+}
+
+/// Nat.shiftRight
+pub fn shiftRight(x: BigUint, y: BigUint) ?BigUint {
+    const sh = y.toConst().toInt(usize) catch return null;
+    var r = BigUint.init(A) catch util.oom();
+    r.shiftRight(&x, sh) catch util.oom();
+    return r;
 }
