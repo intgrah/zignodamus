@@ -22,19 +22,21 @@ const Error = Writer.Error;
 
 pub fn debugPrint(f: *Writer, elem: anytype) Error!void {
     const A = @TypeOf(elem);
-    if (A == NamePtr) return debugName(f, elem);
-    if (A == LevelPtr) return debugLevel(f, elem);
-    if (A == ExprPtr) return debugExpr(f, elem);
-    if (A == LevelsPtr) return debugLevels(f, elem);
-    if (A == StringPtr) return debugString(f, elem);
-    if (A == BigUintPtr) return debugBignum(f, elem);
-    if (A == *const DeclarInfo or A == *DeclarInfo) return debugDeclarInfo(f, elem);
-    if (A == DeclarInfo) return debugDeclarInfo(f, &elem);
-    if (A == RecRule) return debugRecRule(f, elem);
-    if (A == ReducibilityHint) return debugReducibilityHint(f, elem);
+    switch (A) {
+        NamePtr => return debugName(f, elem),
+        LevelPtr => return debugLevel(f, elem),
+        ExprPtr => return debugExpr(f, elem),
+        LevelsPtr => return debugLevels(f, elem),
+        StringPtr => return debugString(f, elem),
+        BigUintPtr => return debugBignum(f, elem),
+        *const DeclarInfo, *DeclarInfo => return debugDeclarInfo(f, elem),
+        DeclarInfo => return debugDeclarInfo(f, &elem),
+        RecRule => return debugRecRule(f, elem),
+        ReducibilityHint => return debugReducibilityHint(f, elem),
+        else => {},
+    }
 
-    const info = @typeInfo(A);
-    switch (info) {
+    switch (@typeInfo(A)) {
         .optional => {
             if (elem) |x| {
                 try f.writeAll("Some(");
