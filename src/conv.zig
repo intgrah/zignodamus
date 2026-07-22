@@ -61,7 +61,7 @@ pub fn defEqCore(self: *TypeChecker, x: ExprPtr, y: ExprPtr) bool {
 }
 
 pub fn convTypesAt(self: *TypeChecker, depth: u32, a: V, b: V) bool {
-    return unify(self, true, depth, a, b);
+    return conv(self, true, depth, a, b);
 }
 
 fn envsPtrEqual(e1: E, e2: E) bool {
@@ -86,7 +86,7 @@ fn envsPtrEqual(e1: E, e2: E) bool {
     }
 }
 
-fn unify(self: *TypeChecker, comptime RIGID: bool, depth: u32, x_in: V, y_in: V) bool {
+fn conv(self: *TypeChecker, comptime RIGID: bool, depth: u32, x_in: V, y_in: V) bool {
     var x = x_in;
     var y = y_in;
     while (true) {
@@ -109,19 +109,19 @@ fn unify(self: *TypeChecker, comptime RIGID: bool, depth: u32, x_in: V, y_in: V)
                                     x = sx.elim.appV();
                                     y = sy.elim.appV();
                                 } else {
-                                    return unifyGeneral(self, RIGID, depth, x, y);
+                                    return convGeneral(self, RIGID, depth, x, y);
                                 }
                             } else {
-                                return unifyGeneral(self, RIGID, depth, x, y);
+                                return convGeneral(self, RIGID, depth, x, y);
                             }
                         },
-                        else => return unifyGeneral(self, RIGID, depth, x, y),
+                        else => return convGeneral(self, RIGID, depth, x, y),
                     },
-                    else => return unifyGeneral(self, RIGID, depth, x, y),
+                    else => return convGeneral(self, RIGID, depth, x, y),
                 },
-                else => return unifyGeneral(self, RIGID, depth, x, y),
+                else => return convGeneral(self, RIGID, depth, x, y),
             },
-            else => return unifyGeneral(self, RIGID, depth, x, y),
+            else => return convGeneral(self, RIGID, depth, x, y),
         }
     }
 }
@@ -133,7 +133,7 @@ fn isLam(v: V) bool {
     };
 }
 
-fn unifyGeneral(self: *TypeChecker, comptime RIGID: bool, depth: u32, x: V, y: V) bool {
+fn convGeneral(self: *TypeChecker, comptime RIGID: bool, depth: u32, x: V, y: V) bool {
     const cacheable = isCacheable(x) or isCacheable(y);
     const neg_eligible = !isLam(x) and !isLam(y);
     if (cacheable) {
@@ -151,7 +151,7 @@ fn unifyGeneral(self: *TypeChecker, comptime RIGID: bool, depth: u32, x: V, y: V
                 return false;
             }
         }
-        const result = unifyNoCache(self, RIGID, depth, x, y);
+        const result = convNoCache(self, RIGID, depth, x, y);
         if (result) {
             self.tc_cache.conv_cache.put(util.smp_allocator, cache_key, {}) catch util.oom();
         } else if (RIGID and neg_eligible) {
@@ -163,18 +163,18 @@ fn unifyGeneral(self: *TypeChecker, comptime RIGID: bool, depth: u32, x: V, y: V
         }
         return result;
     } else {
-        return unifyNoCache(self, RIGID, depth, x, y);
+        return convNoCache(self, RIGID, depth, x, y);
     }
 }
 
-fn unifyNoCache(self: *TypeChecker, comptime RIGID: bool, depth: u32, t: V, t2: V) bool {
+fn convNoCache(self: *TypeChecker, comptime RIGID: bool, depth: u32, t: V, t2: V) bool {
     if (convNat(self, RIGID, depth, t, t2)) |r| {
         return r;
     }
-    if (unifyDirect(self, RIGID, depth, t, t2)) {
+    if (convDirect(self, RIGID, depth, t, t2)) {
         return true;
     }
-    return unifyCold(self, RIGID, depth, t, t2);
+    return convCold(self, RIGID, depth, t, t2);
 }
 
 fn isRecursorOrQuot(v: V) bool {
@@ -194,7 +194,7 @@ fn isUnfold(v: V) bool {
     };
 }
 
-fn unifyDirect(self: *TypeChecker, comptime RIGID: bool, depth: u32, t: V, t2: V) bool {
+fn convDirect(self: *TypeChecker, comptime RIGID: bool, depth: u32, t: V, t2: V) bool {
     switch (t.*) {
         .sort => |sx| switch (t2.*) {
             .sort => |sy| return level.eqAntisymm(self.ctx, sx.level, sy.level),
@@ -215,13 +215,13 @@ fn unifyDirect(self: *TypeChecker, comptime RIGID: bool, depth: u32, t: V, t2: V
         .rigid => |rx| switch (t2.*) {
             .rigid => |ry| {
                 if (rigidHeadEq(rx.head, ry.head)) {
-                    return unifySpine(self, RIGID, depth, rx.spine, ry.spine);
+                    return convSpine(self, RIGID, depth, rx.spine, ry.spine);
                 }
                 switch (rx.head) {
                     .ctor => |cx| switch (ry.head) {
                         .ctor => |cy| {
                             if (cx.name == cy.name and level.eqAntisymmMany(self.ctx, cx.levels, cy.levels)) {
-                                return unifySpine(self, RIGID, depth, rx.spine, ry.spine);
+                                return convSpine(self, RIGID, depth, rx.spine, ry.spine);
                             }
                         },
                         else => {},
@@ -229,7 +229,7 @@ fn unifyDirect(self: *TypeChecker, comptime RIGID: bool, depth: u32, t: V, t2: V
                     .inductive => |ix| switch (ry.head) {
                         .inductive => |iy| {
                             if (ix.name == iy.name and level.eqAntisymmMany(self.ctx, ix.levels, iy.levels)) {
-                                return unifySpine(self, RIGID, depth, rx.spine, ry.spine);
+                                return convSpine(self, RIGID, depth, rx.spine, ry.spine);
                             }
                         },
                         else => {},
@@ -237,7 +237,7 @@ fn unifyDirect(self: *TypeChecker, comptime RIGID: bool, depth: u32, t: V, t2: V
                     .axiom => |ax| switch (ry.head) {
                         .axiom => |ay| {
                             if (ax.name == ay.name and level.eqAntisymmMany(self.ctx, ax.levels, ay.levels)) {
-                                return unifySpine(self, RIGID, depth, rx.spine, ry.spine);
+                                return convSpine(self, RIGID, depth, rx.spine, ry.spine);
                             }
                         },
                         else => {},
@@ -245,14 +245,14 @@ fn unifyDirect(self: *TypeChecker, comptime RIGID: bool, depth: u32, t: V, t2: V
                     .recursor => |nx| switch (ry.head) {
                         .recursor => |ny| {
                             const heads_match = nx.name == ny.name and level.eqAntisymmMany(self.ctx, nx.levels, ny.levels);
-                            return unifyIota(self, RIGID, depth, t, t2, heads_match, rx.spine, ry.spine);
+                            return convIota(self, RIGID, depth, t, t2, heads_match, rx.spine, ry.spine);
                         },
                         else => {},
                     },
                     .quot_const => |nx| switch (ry.head) {
                         .quot_const => |ny| {
                             const heads_match = nx.name == ny.name and level.eqAntisymmMany(self.ctx, nx.levels, ny.levels);
-                            return unifyIota(self, RIGID, depth, t, t2, heads_match, rx.spine, ry.spine);
+                            return convIota(self, RIGID, depth, t, t2, heads_match, rx.spine, ry.spine);
                         },
                         else => {},
                     },
@@ -270,14 +270,14 @@ fn unifyDirect(self: *TypeChecker, comptime RIGID: bool, depth: u32, t: V, t2: V
                 if (bx_pi.body.body == by_pi.body.body and bx_pi.domain == by_pi.domain and envsPtrEqual(bx_pi.body.env, by_pi.body.env)) {
                     return true;
                 }
-                if (!unify(self, RIGID, depth, bx_pi.domain, by_pi.domain)) {
+                if (!conv(self, RIGID, depth, bx_pi.domain, by_pi.domain)) {
                     return false;
                 }
                 const dx = bx_pi.domain;
                 const fresh = eval.mkBvarHc(self, depth, dx);
                 const vx = eval.applyClosure(self, depth + 1, &bx_pi.body, fresh);
                 const vy = eval.applyClosure(self, depth + 1, &by_pi.body, fresh);
-                return unify(self, RIGID, depth + 1, vx, vy);
+                return conv(self, RIGID, depth + 1, vx, vy);
             },
             else => {},
         },
@@ -290,7 +290,7 @@ fn unifyDirect(self: *TypeChecker, comptime RIGID: bool, depth: u32, t: V, t2: V
                 const fresh = eval.mkBvarHc(self, depth, dx);
                 const vx = eval.applyClosure(self, depth + 1, &bx_lam.body, fresh);
                 const vy = eval.applyClosure(self, depth + 1, &by_lam.body, fresh);
-                return unify(self, RIGID, depth + 1, vx, vy);
+                return conv(self, RIGID, depth + 1, vx, vy);
             },
             else => {},
         },
@@ -320,36 +320,36 @@ fn unifyDirect(self: *TypeChecker, comptime RIGID: bool, depth: u32, t: V, t2: V
                     if (lh.isLt(rh)) {
                         const v2 = eval.unfoldValue(self, depth, t2);
                         if (v2 != t2) {
-                            return unify(self, true, depth, t, v2);
+                            return conv(self, true, depth, t, v2);
                         }
                         const v1 = eval.unfoldValue(self, depth, t);
                         if (v1 != t) {
-                            return unify(self, true, depth, v1, t2);
+                            return conv(self, true, depth, v1, t2);
                         }
                         const f2 = eval.unfoldValueDemand(self, depth, t2);
                         if (f2 == t2) {
                             return false;
                         }
-                        return unify(self, true, depth, t, f2);
+                        return conv(self, true, depth, t, f2);
                     } else if (rh.isLt(lh)) {
                         const v1 = eval.unfoldValue(self, depth, t);
                         if (v1 != t) {
-                            return unify(self, true, depth, v1, t2);
+                            return conv(self, true, depth, v1, t2);
                         }
                         const v2 = eval.unfoldValue(self, depth, t2);
                         if (v2 != t2) {
-                            return unify(self, true, depth, t, v2);
+                            return conv(self, true, depth, t, v2);
                         }
                         const f1 = eval.unfoldValueDemand(self, depth, t);
                         if (f1 == t) {
                             return false;
                         }
-                        return unify(self, true, depth, f1, t2);
+                        return conv(self, true, depth, f1, t2);
                     } else {
                         return unfoldPair(self, depth, t, t2);
                     }
                 } else if (heads_match) {
-                    return unifySpine(self, false, depth, sx, sy);
+                    return convSpine(self, false, depth, sx, sy);
                 } else {
                     return false;
                 }
@@ -371,9 +371,9 @@ fn unifyDirect(self: *TypeChecker, comptime RIGID: bool, depth: u32, t: V, t2: V
                     if (f1 == t) {
                         return false;
                     }
-                    return unify(self, true, depth, f1, t2);
+                    return conv(self, true, depth, f1, t2);
                 }
-                return unify(self, true, depth, v1, t2);
+                return conv(self, true, depth, v1, t2);
             },
             else => {},
         }
@@ -388,9 +388,9 @@ fn unifyDirect(self: *TypeChecker, comptime RIGID: bool, depth: u32, t: V, t2: V
                     if (f2 == t2) {
                         return false;
                     }
-                    return unify(self, true, depth, t, f2);
+                    return conv(self, true, depth, t, f2);
                 }
-                return unify(self, true, depth, t, v2);
+                return conv(self, true, depth, t, v2);
             },
             else => {},
         }
@@ -399,17 +399,17 @@ fn unifyDirect(self: *TypeChecker, comptime RIGID: bool, depth: u32, t: V, t2: V
                 return true;
             }
             if (eval.iotaValue(self, depth, t)) |v1| {
-                return unify(self, true, depth, v1, t2);
+                return conv(self, true, depth, v1, t2);
             }
             if (isRecursorOrQuot(t2)) {
                 if (eval.iotaValue(self, depth, t2)) |v2| {
-                    return unify(self, true, depth, t, v2);
+                    return conv(self, true, depth, t, v2);
                 }
             }
             if (isUnfold(t2)) {
                 const v2 = eval.unfoldValueDemand(self, depth, t2);
                 if (v2 != t2) {
-                    return unify(self, true, depth, t, v2);
+                    return conv(self, true, depth, t, v2);
                 }
             }
             return false;
@@ -419,12 +419,12 @@ fn unifyDirect(self: *TypeChecker, comptime RIGID: bool, depth: u32, t: V, t2: V
                 return true;
             }
             if (eval.iotaValue(self, depth, t2)) |v2| {
-                return unify(self, true, depth, t, v2);
+                return conv(self, true, depth, t, v2);
             }
             if (isUnfold(t)) {
                 const v1 = eval.unfoldValueDemand(self, depth, t);
                 if (v1 != t) {
-                    return unify(self, true, depth, v1, t2);
+                    return conv(self, true, depth, v1, t2);
                 }
             }
             return false;
@@ -436,7 +436,7 @@ fn unifyDirect(self: *TypeChecker, comptime RIGID: bool, depth: u32, t: V, t2: V
 
 fn spineProbe(self: *TypeChecker, depth: u32, sx: S, sy: S) bool {
     self.tc_cache.probe_depth += 1;
-    const ok = unifySpine(self, true, depth, sx, sy);
+    const ok = convSpine(self, true, depth, sx, sy);
     self.tc_cache.probe_depth -= 1;
     return ok;
 }
@@ -450,12 +450,12 @@ fn unfoldPair(self: *TypeChecker, depth: u32, t: V, t2: V) bool {
         if (f1 == t and f2 == t2) {
             return false;
         }
-        return unify(self, true, depth, f1, f2);
+        return conv(self, true, depth, f1, f2);
     }
-    return unify(self, true, depth, v1, v2);
+    return conv(self, true, depth, v1, v2);
 }
 
-fn unifyIota(self: *TypeChecker, comptime RIGID: bool, depth: u32, t: V, t2: V, heads_match: bool, sx: S, sy: S) bool {
+fn convIota(self: *TypeChecker, comptime RIGID: bool, depth: u32, t: V, t2: V, heads_match: bool, sx: S, sy: S) bool {
     if (RIGID) {
         if (heads_match and spineProbe(self, depth, sx, sy)) {
             return true;
@@ -467,14 +467,14 @@ fn unifyIota(self: *TypeChecker, comptime RIGID: bool, depth: u32, t: V, t2: V, 
         const v2 = iotaOrSelf(self, depth, t2);
         const progressed = (v1 != t) or (v2 != t2);
         if (progressed) {
-            return unify(self, true, depth, v1, v2);
+            return conv(self, true, depth, v1, v2);
         }
         if (heads_match) {
-            return unifySpine(self, true, depth, sx, sy);
+            return convSpine(self, true, depth, sx, sy);
         }
         return false;
     } else if (heads_match) {
-        return unifySpine(self, false, depth, sx, sy);
+        return convSpine(self, false, depth, sx, sy);
     } else {
         return false;
     }
@@ -494,24 +494,24 @@ fn unfoldHint(self: *TypeChecker, name: NamePtr) ReducibilityHint {
     return ReducibilityHint.opaque_;
 }
 
-fn unifySpine(self: *TypeChecker, comptime RIGID: bool, depth: u32, sx: S, sy: S) bool {
+fn convSpine(self: *TypeChecker, comptime RIGID: bool, depth: u32, sx: S, sy: S) bool {
     const empty = &Spine.empty;
     if (sx == empty or sy == empty) {
         return sx == empty and sy == empty;
     }
-    if (!unifySpine(self, RIGID, depth, sx.prev, sy.prev)) {
+    if (!convSpine(self, RIGID, depth, sx.prev, sy.prev)) {
         return false;
     }
     if (sx.elim.isApp()) {
         if (!sy.elim.isApp()) return false;
-        return unify(self, RIGID, depth, sx.elim.appV(), sy.elim.appV());
+        return conv(self, RIGID, depth, sx.elim.appV(), sy.elim.appV());
     } else {
         if (sy.elim.isApp()) return false;
         return sx.elim.projTyName() == sy.elim.projTyName() and sx.elim.projIdx() == sy.elim.projIdx();
     }
 }
 
-fn unifyCold(self: *TypeChecker, comptime RIGID: bool, depth: u32, x: V, y: V) bool {
+fn convCold(self: *TypeChecker, comptime RIGID: bool, depth: u32, x: V, y: V) bool {
     if (!RIGID) {
         return false;
     }
@@ -525,7 +525,7 @@ fn unifyCold(self: *TypeChecker, comptime RIGID: bool, depth: u32, x: V, y: V) b
                 const fresh = eval.mkBvarHc(self, depth, domain);
                 const lhs = eval.applyClosure(self, depth + 1, &lx.body, fresh);
                 const rhs = eval.apply(self, depth + 1, y, fresh);
-                return unify(self, true, depth + 1, lhs, rhs);
+                return conv(self, true, depth + 1, lhs, rhs);
             }
         },
         else => {},
@@ -537,7 +537,7 @@ fn unifyCold(self: *TypeChecker, comptime RIGID: bool, depth: u32, x: V, y: V) b
                 const fresh = eval.mkBvarHc(self, depth, domain);
                 const lhs = eval.apply(self, depth + 1, x, fresh);
                 const rhs = eval.applyClosure(self, depth + 1, &ly.body, fresh);
-                return unify(self, true, depth + 1, lhs, rhs);
+                return conv(self, true, depth + 1, lhs, rhs);
             }
         },
         else => {},
@@ -666,7 +666,7 @@ fn tryEtaStructV(self: *TypeChecker, depth: u32, ind_name: NamePtr, x: V, y: V) 
     while (i < @as(usize, num_fields)) : (i += 1) {
         const proj = eval.doProj(self, depth, ind_name, i, x);
         const rhs = yargs[@as(usize, num_params) + i];
-        if (!unify(self, true, depth, proj, rhs)) {
+        if (!conv(self, true, depth, proj, rhs)) {
             return false;
         }
     }
@@ -698,7 +698,7 @@ fn convNat(self: *TypeChecker, comptime RIGID: bool, depth: u32, x: V, y: V) ?bo
     const py = valueNatPred(self, y);
     if (px) |a| {
         if (py) |b| {
-            return unify(self, RIGID, depth, a, b);
+            return conv(self, RIGID, depth, a, b);
         }
     }
     return null;
