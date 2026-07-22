@@ -11,14 +11,9 @@ pub fn UnionFind(comptime A: type) type {
     return struct {
         const Self = @This();
 
-        const Entry = struct {
-            key: A,
-            node: Node,
-        };
-
         const IndexMap = std.HashMapUnmanaged(A, usize, FxContext(A), 80);
 
-        entries: std.ArrayList(Entry),
+        entries: std.ArrayList(Node),
         index_of: IndexMap,
 
         pub const empty: Self = .{ .entries = .empty, .index_of = .empty };
@@ -38,32 +33,32 @@ pub fn UnionFind(comptime A: type) type {
             if (gop.found_existing) return gop.value_ptr.*;
             const idx = self.entries.items.len;
             gop.value_ptr.* = idx;
-            self.entries.append(util.smp_allocator, .{ .key = e, .node = .{ .parent = idx, .rank = 0 } }) catch util.oom();
+            self.entries.append(util.smp_allocator, .{ .parent = idx, .rank = 0 }) catch util.oom();
             return idx;
         }
 
         fn findParentIdx(self: *Self, idx: usize) usize {
-            const parent_idx = self.entries.items[idx].node.parent;
+            const parent_idx = self.entries.items[idx].parent;
             if (parent_idx == idx) {
                 return idx;
             } else {
                 const root = self.findParentIdx(parent_idx);
-                self.entries.items[idx].node.parent = root;
+                self.entries.items[idx].parent = root;
                 return root;
             }
         }
 
         fn linkRoots(self: *Self, x_root: usize, y_root: usize) void {
             if (x_root != y_root) {
-                const x_root_rank = self.entries.items[x_root].node.rank;
-                const y_root_rank = self.entries.items[y_root].node.rank;
+                const x_root_rank = self.entries.items[x_root].rank;
+                const y_root_rank = self.entries.items[y_root].rank;
                 if (y_root_rank < x_root_rank) {
-                    self.entries.items[y_root].node.parent = x_root;
+                    self.entries.items[y_root].parent = x_root;
                 } else {
-                    self.entries.items[x_root].node.parent = y_root;
+                    self.entries.items[x_root].parent = y_root;
                 }
                 if (x_root_rank == y_root_rank) {
-                    self.entries.items[y_root].node.rank += 1;
+                    self.entries.items[y_root].rank += 1;
                 }
             }
         }
