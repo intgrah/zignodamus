@@ -14,6 +14,10 @@ pub const FxHasher = struct {
     }
 };
 
+pub fn tagHash(comptime U: type, comptime tag: std.meta.Tag(U)) u64 {
+    return std.hash.Fnv1a_64.hash(@typeName(U) ++ "." ++ @tagName(tag));
+}
+
 pub fn hash64(args: anytype) u64 {
     var hasher = FxHasher{};
     inline for (args) |a| {

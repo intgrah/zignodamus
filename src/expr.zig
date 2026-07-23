@@ -18,17 +18,19 @@ const StringPtr = ptr.StringPtr;
 const BigUintPtr = ptr.BigUintPtr;
 const FxHashMap = swiss_map.FxHashMap;
 
-pub const var_hash: u64 = 281;
-pub const sort_hash: u64 = 563;
-pub const const_hash: u64 = 1129;
-pub const proj_hash: u64 = 17;
-pub const lambda_hash: u64 = 431;
-pub const let_hash: u64 = 241;
-pub const pi_hash: u64 = 719;
-pub const app_hash: u64 = 233;
-pub const local_hash: u64 = 211;
-pub const string_lit_hash: u64 = 1493;
-pub const nat_lit_hash: u64 = 1583;
+const tagHash = @import("hash.zig").tagHash;
+
+pub const var_hash: u64 = tagHash(Expr.Kind, .@"var");
+pub const sort_hash: u64 = tagHash(Expr.Kind, .sort);
+pub const const_hash: u64 = tagHash(Expr.Kind, .@"const");
+pub const proj_hash: u64 = tagHash(Expr.Kind, .proj);
+pub const lambda_hash: u64 = tagHash(Expr.Kind, .lambda);
+pub const let_hash: u64 = tagHash(Expr.Kind, .let);
+pub const pi_hash: u64 = tagHash(Expr.Kind, .pi);
+pub const app_hash: u64 = tagHash(Expr.Kind, .app);
+pub const local_hash: u64 = tagHash(Expr.Kind, .local);
+pub const string_lit_hash: u64 = tagHash(Expr.Kind, .string_lit);
+pub const nat_lit_hash: u64 = tagHash(Expr.Kind, .nat_lit);
 
 pub const FVarId = union(enum) {
     dbj_level: u16,

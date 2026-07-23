@@ -9,11 +9,13 @@ const LevelsPtr = ptr.LevelsPtr;
 const NamePtr = ptr.NamePtr;
 const TcCtx = @import("TcCtx.zig");
 
-pub const zero_hash: u64 = 283;
-pub const succ_hash: u64 = 541;
-pub const max_hash: u64 = 1091;
-pub const imax_hash: u64 = 1747;
-pub const param_hash: u64 = 947;
+const tagHash = @import("hash.zig").tagHash;
+
+pub const zero_hash: u64 = tagHash(Level.Kind, .zero);
+pub const succ_hash: u64 = tagHash(Level.Kind, .succ);
+pub const max_hash: u64 = tagHash(Level.Kind, .max);
+pub const imax_hash: u64 = tagHash(Level.Kind, .imax);
+pub const param_hash: u64 = tagHash(Level.Kind, .param);
 
 pub const Level = struct {
     hash: u64,

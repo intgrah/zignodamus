@@ -5,9 +5,11 @@ const NamePtr = @import("ptr.zig").NamePtr;
 const StringPtr = @import("ptr.zig").StringPtr;
 const TcCtx = @import("TcCtx.zig");
 
-pub const anon_hash: u64 = 43;
-pub const str_hash: u64 = 911;
-pub const num_hash: u64 = 103;
+const tagHash = @import("hash.zig").tagHash;
+
+pub const anon_hash: u64 = tagHash(Name.Kind, .anon);
+pub const str_hash: u64 = tagHash(Name.Kind, .str);
+pub const num_hash: u64 = tagHash(Name.Kind, .num);
 
 pub const Name = struct {
     hash: u64,
