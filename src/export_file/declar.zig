@@ -88,21 +88,25 @@ fn joinName(pfx: []const u8, sfx: []const u8) []const u8 {
     return out;
 }
 
-fn axiomPermitted(self: *const Parser, n: NamePtr) bool {
-    if (self.config.unsafe_permit_all_axioms) {
-        return true;
-    }
-    if (self.config.permitted_axioms) |v| {
-        const s = nameToString(self, n);
-        defer util.smp_allocator.free(s);
-        for (v) |a| {
-            if (std.mem.eql(u8, a, s)) {
-                return true;
+const AxiomDecision = enum { permit, skip, reject };
+
+fn axiomDecision(self: *const Parser, n: NamePtr) AxiomDecision {
+    switch (self.config.axiom_policy) {
+        .unsafe_permit_all => return .permit,
+        .permitted => |p| {
+            const s = nameToString(self, n);
+            defer util.smp_allocator.free(s);
+            for (p.axioms) |a| {
+                if (std.mem.eql(u8, a, s)) {
+                    return .permit;
+                }
             }
-        }
-        return false;
+            return switch (p.on_unpermitted) {
+                .hard_error => .reject,
+                .skip => .skip,
+            };
+        },
     }
-    return false;
 }
 
 fn insertDeclar(self: *Parser, n: NamePtr, d: Declar) ParseError!void {
@@ -119,16 +123,10 @@ pub fn parseAxiom(self: *Parser, ta: std.mem.Allocator, v: Value) ParseError!voi
     const ty = try item.getExprPtr(self, try json.asU32(o.get("type") orelse return fail("missing type")));
     const info = DeclarInfo{ .name = aname, .ty = ty, .uparams = uparams };
     const axiom = Declar{ .axiom = .{ .info = info } };
-    if (axiomPermitted(self, aname)) {
-        try insertDeclar(self, aname, axiom);
-    } else {
-        const name_string = nameToString(self, aname);
-        if (self.config.unpermitted_axiom_hard_error) {
-            util.smp_allocator.free(name_string);
-            return fail("export file declares unpermitted axiom");
-        } else {
-            self.skipped.append(util.smp_allocator, name_string) catch util.oom();
-        }
+    switch (axiomDecision(self, aname)) {
+        .permit => try insertDeclar(self, aname, axiom),
+        .reject => return fail("export file declares unpermitted axiom"),
+        .skip => self.skipped.append(util.smp_allocator, nameToString(self, aname)) catch util.oom(),
     }
 }
 

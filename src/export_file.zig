@@ -21,15 +21,19 @@ pub const ExportFile = struct {
     }
 };
 
+pub const AxiomPolicy = union(enum) {
+    unsafe_permit_all,
+    permitted: Permitted,
+
+    pub const Permitted = struct {
+        axioms: []const []const u8 = &.{},
+        on_unpermitted: enum { hard_error, skip } = .hard_error,
+    };
+};
+
 pub const Config = struct {
-    export_file_path: ?[]const u8 = null,
-    use_stdin: bool = false,
-    permitted_axioms: ?[]const []const u8 = null,
-    unpermitted_axiom_hard_error: bool = true,
+    axiom_policy: AxiomPolicy = .{ .permitted = .{} },
     num_threads: usize = 0,
     nat_extension: bool = false,
     string_extension: bool = false,
-    print_success_message: bool = false,
-    print_axioms: bool = true,
-    unsafe_permit_all_axioms: bool = false,
 };

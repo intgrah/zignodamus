@@ -23,6 +23,9 @@ pub const union_find = @import("union_find.zig");
 pub const util = @import("util.zig");
 pub const value = @import("value.zig");
 
+pub const run = @import("run.zig").run;
+pub const RunOptions = @import("run.zig").Options;
+
 pub const stack_size: usize = 2 * 1024 * 1024 * 1024;
 
 test {
@@ -50,6 +53,7 @@ test {
         union_find,
         util,
         value,
+        @import("run.zig"),
     };
     inline for (modules) |m| {
         std.testing.refAllDecls(m);
