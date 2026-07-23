@@ -17,7 +17,7 @@ pub const Name = struct {
         num: struct { pfx: NamePtr, n: u64 },
     };
 
-    pub fn mk(kind: Kind) Name {
+    pub inline fn mk(kind: Kind) Name {
         return .{ .hash = kindHash(kind), .kind = kind };
     }
 

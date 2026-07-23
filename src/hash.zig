@@ -18,7 +18,7 @@ fn tagHash(comptime U: type, comptime tag: std.meta.Tag(U)) u64 {
     return std.hash.Fnv1a_64.hash(@typeName(U) ++ "." ++ @tagName(tag));
 }
 
-pub fn kindHash(kind: anytype) u64 {
+pub inline fn kindHash(kind: anytype) u64 {
     switch (kind) {
         inline else => |payload, tag| {
             var hasher = FxHasher{};

@@ -25,7 +25,7 @@ pub const Level = struct {
 
     pub const Pair = struct { l: LevelPtr, r: LevelPtr };
 
-    pub fn mk(kind: Kind) Level {
+    pub inline fn mk(kind: Kind) Level {
         return .{ .hash = kindHash(kind), .kind = kind };
     }
 

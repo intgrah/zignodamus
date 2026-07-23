@@ -110,7 +110,7 @@ pub const Expr = struct {
         },
     };
 
-    pub fn mk(kind: Kind) Expr {
+    pub inline fn mk(kind: Kind) Expr {
         return .{ .hash = kindHash(kind), .kind = kind };
     }
 
