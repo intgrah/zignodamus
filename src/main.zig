@@ -14,6 +14,7 @@ const params = clap.parseParamsComptime(
     \\    --string-extension                Enable the String literal extension.
     \\    --unsafe-permit-all-axioms        Permit all axioms (unsafe).
     \\    --permit-axiom <str>...           Permit an axiom by name (repeatable).
+    \\    --permit-standard-axioms          Permit propext, Classical.choice, and Quot.sound.
     \\    --no-unpermitted-axiom-hard-error Do not hard-error on unpermitted axioms.
     \\    --print-success                   Print a success message.
     \\    --parse-only                      Exit after parsing, without checking.
@@ -56,15 +57,21 @@ fn mainInner(init: std.process.Init) !void {
         break :blk .{ .path = res.positionals[0] orelse return error.MissingExportFile };
     };
 
+    const permitted_axioms = try std.mem.concat(init.gpa, []const u8, &.{
+        if (res.args.@"permit-standard-axioms" != 0) zignodamus.export_file.standard_axioms else &.{},
+        res.args.@"permit-axiom",
+    });
+    defer init.gpa.free(permitted_axioms);
+
     const axiom_policy: zignodamus.export_file.AxiomPolicy = blk: {
         const hard_error = res.args.@"no-unpermitted-axiom-hard-error" == 0;
         if (res.args.@"unsafe-permit-all-axioms" != 0) {
             if (hard_error) return error.ConflictingAxiomOptions;
-            if (res.args.@"permit-axiom".len > 0) return error.ConflictingAxiomOptions;
+            if (permitted_axioms.len > 0) return error.ConflictingAxiomOptions;
             break :blk .unsafe_permit_all;
         }
         break :blk .{ .permitted = .{
-            .axioms = res.args.@"permit-axiom",
+            .axioms = permitted_axioms,
             .on_unpermitted = if (hard_error) .hard_error else .skip,
         } };
     };

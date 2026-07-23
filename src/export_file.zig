@@ -21,6 +21,8 @@ pub const ExportFile = struct {
     }
 };
 
+pub const standard_axioms: []const []const u8 = &.{ "propext", "Classical.choice", "Quot.sound" };
+
 pub const AxiomPolicy = union(enum) {
     unsafe_permit_all,
     permitted: Permitted,
