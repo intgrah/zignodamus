@@ -76,21 +76,17 @@ pub fn run(io: std.Io, gpa: std.mem.Allocator, options: Options) !void {
         return error.CheckFailed;
     }
 
-    if (options.print_success_message) {
-        var buf: [4096]u8 = undefined;
-        var writer = std.Io.File.stdout().writer(io, &buf);
-        const w = &writer.interface;
-        if (skipped_axioms.len == 0) {
-            try w.print("Checked {d} declarations with no errors\n", .{export_file.declars.count()});
-        } else {
-            try w.print("Checked {d} declarations with no errors, skipping exported but unpermitted axioms {any}\n", .{ export_file.declars.count(), skipped_axioms });
-        }
-        try w.flush();
-    } else if (skipped_axioms.len != 0) {
-        var buf: [4096]u8 = undefined;
-        var writer = std.Io.File.stdout().writer(io, &buf);
-        const w = &writer.interface;
+    if (!options.print_success_message and skipped_axioms.len == 0) return;
+
+    var buf: [4096]u8 = undefined;
+    var writer = std.Io.File.stdout().writer(io, &buf);
+    const w = &writer.interface;
+    if (!options.print_success_message) {
         try w.print("Skipped exported but unpermitted axioms {any}\n", .{skipped_axioms});
-        try w.flush();
+    } else if (skipped_axioms.len == 0) {
+        try w.print("Checked {d} declarations with no errors\n", .{export_file.declars.count()});
+    } else {
+        try w.print("Checked {d} declarations with no errors, skipping exported but unpermitted axioms {any}\n", .{ export_file.declars.count(), skipped_axioms });
     }
+    try w.flush();
 }
