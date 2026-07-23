@@ -1,8 +1,10 @@
 const std = @import("std");
+const OptimizeMode = std.builtin.OptimizeMode;
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{});
+    const optimize =
+        b.standardOptimizeOption(.{ .preferred_optimize_mode = OptimizeMode.ReleaseFast });
 
     const mod = b.addModule("zignodamus", .{
         .root_source_file = b.path("src/root.zig"),
