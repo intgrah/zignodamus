@@ -89,7 +89,7 @@ fn Interner(comptime T: type) type {
             self.growth_left = maxLoad(newcap);
             var i: usize = 0;
             while (i < old_cap) : (i += 1) {
-                if (old_ctrl[i] & 0x80 == 0) self.place(structHashRef(T, old_slots[i]), old_slots[i]);
+                if (old_ctrl[i] & 0x80 == 0) self.place(getHashOf(T, old_slots[i]), old_slots[i]);
             }
             if (old_cap != 0) {
                 smp_allocator.free(@as([*]align(@alignOf(Slot)) u8, @alignCast(old_ctrl))[0..bufLen(old_cap)]);
@@ -102,7 +102,7 @@ fn Interner(comptime T: type) type {
 
         pub inline fn get(self: *const Self, v: *const T) ?*const T {
             if (self.cap == 0) return null;
-            const h = structHashRef(T, v);
+            const h = getHashOf(T, v);
             const f = h2(h);
             const mask = self.cap - 1;
             var pos: usize = @intCast(h & mask);
@@ -125,7 +125,7 @@ fn Interner(comptime T: type) type {
             self.maybeGrow();
             const r = ar.create(T);
             r.* = v.*;
-            self.place(structHashRef(T, r), r);
+            self.place(getHashOf(T, r), r);
             return r;
         }
 
@@ -138,7 +138,7 @@ fn Interner(comptime T: type) type {
             self.maybeGrow();
             const r = ar.create(T);
             r.* = v;
-            self.placeUniqueRef(structHashRef(T, r), r);
+            self.placeUniqueRef(getHashOf(T, r), r);
             return r;
         }
 
@@ -213,20 +213,16 @@ fn Interner(comptime T: type) type {
     };
 }
 
-inline fn structHashRef(comptime T: type, v: *const T) u64 {
-    return getHashOf(T, v);
-}
-
 inline fn getHashOf(comptime T: type, v: *const T) u64 {
-    if (T == []const u8) {
-        return std.hash.Wyhash.hash(0, v.*);
+    switch (T) {
+        []const u8 => return std.hash.Wyhash.hash(0, v.*),
+        BigUint => {
+            var hasher = FxHasher{};
+            for (v.limbs[0..@as(usize, @intCast(v.len()))]) |limb| hasher.writeU64(limb);
+            return hasher.finish();
+        },
+        else => return v.getHash(),
     }
-    if (T == BigUint) {
-        var hasher = FxHasher{};
-        for (v.limbs[0..@as(usize, @intCast(v.len()))]) |limb| hasher.writeU64(limb);
-        return hasher.finish();
-    }
-    return v.getHash();
 }
 
 inline fn refEql(comptime T: type, a: *const T, b: *const T) bool {
@@ -256,7 +252,7 @@ pub const BigUintInterner = struct {
 
     const Context = struct {
         pub fn hash(_: Context, k: *const BigUint) u64 {
-            return structHashRef(BigUint, k);
+            return getHashOf(BigUint, k);
         }
         pub fn eql(_: Context, a: *const BigUint, b: *const BigUint) bool {
             return refEql(BigUint, a, b);
@@ -275,7 +271,7 @@ pub const BigUintInterner = struct {
     };
 
     pub fn get(self: *const BigUintInterner, v: *const BigUint) ?*const BigUint {
-        const h = structHashRef(BigUint, v);
+        const h = getHashOf(BigUint, v);
         return self.table.getKeyAdapted(v, Probe{ .h = h });
     }
     pub fn insert(self: *BigUintInterner, ar: *Arena, v: BigUint) *const BigUint {
