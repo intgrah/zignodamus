@@ -226,19 +226,20 @@ inline fn getHashOf(comptime T: type, v: *const T) u64 {
 }
 
 inline fn refEql(comptime T: type, a: *const T, b: *const T) bool {
-    if (T == []const u8) return std.mem.eql(u8, a.*, b.*);
-    if (T == BigUint) return a.eql(b.*);
-    if (T == value.Frame) {
-        return a.mask == b.mask and a.lsub == b.lsub and std.mem.eql(value.V, a.slots, b.slots);
+    switch (T) {
+        []const u8 => return std.mem.eql(u8, a.*, b.*),
+        BigUint => return a.eql(b.*),
+        value.Frame => return a.mask == b.mask and a.lsub == b.lsub and std.mem.eql(value.V, a.slots, b.slots),
+        expr.Expr => {
+            if (a.kind == .let) {
+                if (b.kind != .let) return false;
+                return a.hash == b.hash and std.meta.eql(a.kind.let.data.*, b.kind.let.data.*);
+            }
+            if (b.kind == .let) return false;
+            return std.meta.eql(a.*, b.*);
+        },
+        else => return std.meta.eql(a.*, b.*),
     }
-    if (T == expr.Expr) {
-        if (a.kind == .let) {
-            if (b.kind != .let) return false;
-            return a.hash == b.hash and std.meta.eql(a.kind.let.data.*, b.kind.let.data.*);
-        }
-        if (b.kind == .let) return false;
-    }
-    return std.meta.eql(a.*, b.*);
 }
 
 pub const NameInterner = Interner(name.Name);
