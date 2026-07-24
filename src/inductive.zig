@@ -74,7 +74,7 @@ fn walkFresh(self: *TypeChecker, w: Walk, dom: V) struct { Walk, V } {
 
 fn sortOfValue(self: *TypeChecker, w: Walk, ty_v: V) tc.Reject!LevelPtr {
     const q = quote.quote(self, w.depth, ty_v);
-    const t = try inference.infer(self, w.depth, w.e, w.c, q, .Check);
+    const t = try inference.infer(self, .Check, w.depth, w.e, w.c, q);
     return inference.ensureSort(self, w.depth, t);
 }
 

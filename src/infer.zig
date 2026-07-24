@@ -28,7 +28,7 @@ pub fn checkDeclarInfo(self: *TypeChecker, d: *const Declar) Reject!void {
     if (!level.noDupesAllParams(self.ctx, info.uparams)) {
         return tc.reject("duplicate universe parameters in declaration", .{});
     }
-    const ty_ty = try infer(self, 0, value.envEmpty(), value.ctxEmpty(), info.ty, .Check);
+    const ty_ty = try infer(self, .Check, 0, value.envEmpty(), value.ctxEmpty(), info.ty);
     const sort = try ensureSort(self, 0, ty_ty);
     if (d.* == .theorem) {
         if (!level.isZero(self.ctx, sort)) {
@@ -45,7 +45,7 @@ pub fn checkDefLike(self: *TypeChecker, d: *const Declar) Reject!void {
         .opaque_ => |x| x.val,
         else => unreachable,
     };
-    const val_ty = try infer(self, 0, value.envEmpty(), value.ctxEmpty(), val, .Check);
+    const val_ty = try infer(self, .Check, 0, value.envEmpty(), value.ctxEmpty(), val);
     const declared = eval.eval(self, 0, value.envEmpty(), d.info().ty);
     if (!conv.defEqAt(self, 0, val_ty, declared)) {
         return tc.reject("def_eq failed", .{});
@@ -60,8 +60,8 @@ pub fn ensureSort(self: *TypeChecker, depth: u32, v: V) Reject!LevelPtr {
     }
 }
 
-fn inferSortOf(self: *TypeChecker, depth: u32, e: E, c: C, ex: ExprPtr, comptime flag: InferFlag) Reject!LevelPtr {
-    const t = try infer(self, depth, e, c, ex, flag);
+fn inferSortOf(self: *TypeChecker, comptime flag: InferFlag, depth: u32, e: E, c: C, ex: ExprPtr) Reject!LevelPtr {
+    const t = try infer(self, flag, depth, e, c, ex);
     return ensureSort(self, depth, t);
 }
 
@@ -101,7 +101,7 @@ fn litInductiveType(self: *TypeChecker, n: ?NamePtr) V {
     return value.mkRigidHeadWithEmpty(self.arena, RigidHead{ .inductive = .{ .name = name, .levels = levels } }, value.spineEmpty());
 }
 
-pub fn infer(self: *TypeChecker, depth: u32, e: E, c: C, ex: ExprPtr, comptime flag: InferFlag) Reject!V {
+pub fn infer(self: *TypeChecker, comptime flag: InferFlag, depth: u32, e: E, c: C, ex: ExprPtr) Reject!V {
     switch (ex.asRef().kind) {
         .@"var" => |x| return c.lookup(x.dbj_idx) orelse tc.reject("loose bvar in infer", .{}),
         .sort => |s| {
@@ -145,15 +145,15 @@ pub fn infer(self: *TypeChecker, depth: u32, e: E, c: C, ex: ExprPtr, comptime f
         }
     }
     const r = switch (ex.asRef().kind) {
-        .app => try inferApp(self, depth, e, c, ex, flag),
+        .app => try inferApp(self, flag, depth, e, c, ex),
         .lambda => |l| blk: {
             const dom = argValue(self, depth, e, l.binder_type);
             if (flag == .Check) {
-                _ = try inferSortOf(self, depth, e, c, l.binder_type, flag);
+                _ = try inferSortOf(self, flag, depth, e, c, l.binder_type);
                 const fresh = eval.mkBvarHc(self, depth, dom);
                 const e2 = value.envExtend(self.arena, e, fresh);
                 const c2 = value.ctxExtend(self.arena, c, dom);
-                _ = try infer(self, depth + 1, e2, c2, l.body, flag);
+                _ = try infer(self, flag, depth + 1, e2, c2, l.body);
             }
             break :blk value.mkPi(self.arena, l.binder_name, l.binder_style, dom, Closure{
                 .env = eval.keyEnv(self, e, ex),
@@ -163,12 +163,12 @@ pub fn infer(self: *TypeChecker, depth: u32, e: E, c: C, ex: ExprPtr, comptime f
             });
         },
         .pi => |p| blk: {
-            const l1 = try inferSortOf(self, depth, e, c, p.binder_type, flag);
+            const l1 = try inferSortOf(self, flag, depth, e, c, p.binder_type);
             const dom = argValue(self, depth, e, p.binder_type);
             const fresh = eval.mkBvarHc(self, depth, dom);
             const e2 = value.envExtend(self.arena, e, fresh);
             const c2 = value.ctxExtend(self.arena, c, dom);
-            const l2 = try inferSortOf(self, depth + 1, e2, c2, p.body, flag);
+            const l2 = try inferSortOf(self, flag, depth + 1, e2, c2, p.body);
             const im = TcCtx.imax(self.ctx, l1, l2);
             break :blk value.mkSort(self.arena, level.simplify(self.ctx, im));
         },
@@ -176,8 +176,8 @@ pub fn infer(self: *TypeChecker, depth: u32, e: E, c: C, ex: ExprPtr, comptime f
             const d = l.data;
             const dom = argValue(self, depth, e, d.binder_type);
             if (flag == .Check) {
-                _ = try inferSortOf(self, depth, e, c, d.binder_type, flag);
-                const val_ty = try infer(self, depth, e, c, d.val, flag);
+                _ = try inferSortOf(self, flag, depth, e, c, d.binder_type);
+                const val_ty = try infer(self, flag, depth, e, c, d.val);
                 if (!conv.convTypesAt(self, depth, dom, val_ty)) {
                     return tc.reject("let def_eq failed", .{});
                 }
@@ -185,26 +185,26 @@ pub fn infer(self: *TypeChecker, depth: u32, e: E, c: C, ex: ExprPtr, comptime f
             const slot = argValue(self, depth, e, d.val);
             const e2 = value.envExtend(self.arena, e, slot);
             const c2 = value.ctxExtend(self.arena, c, dom);
-            break :blk try infer(self, depth, e2, c2, d.body, flag);
+            break :blk try infer(self, flag, depth, e2, c2, d.body);
         },
-        .proj => |p| try inferProj(self, depth, e, c, p.ty_name, p.idx, p.structure, flag),
+        .proj => |p| try inferProj(self, flag, depth, e, c, p.ty_name, p.idx, p.structure),
         else => unreachable,
     };
     self.tc_cache.type_cache.put(util.smp_allocator, key, CachedType.pack(r, flag == .Check)) catch util.oom();
     return r;
 }
 
-fn inferApp(self: *TypeChecker, depth: u32, e: E, c: C, ex: ExprPtr, comptime flag: InferFlag) Reject!V {
+fn inferApp(self: *TypeChecker, comptime flag: InferFlag, depth: u32, e: E, c: C, ex: ExprPtr) Reject!V {
     const ua = expr.unfoldAppsStack(self.ctx.bump, ex);
     var args = ua.args;
     defer args.deinit(self.ctx.bump);
-    var fty = try infer(self, depth, e, c, ua.fun, flag);
+    var fty = try infer(self, flag, depth, e, c, ua.fun);
     while (args.pop()) |arg| {
         const fty_f = eval.forceAll(self, depth, fty);
         switch (fty_f.*) {
             .pi => |p| {
                 if (flag == .Check) {
-                    const arg_ty = try infer(self, depth, e, c, arg, flag);
+                    const arg_ty = try infer(self, flag, depth, e, c, arg);
                     if (!conv.convTypesAt(self, depth, p.domain, arg_ty)) {
                         return tc.reject("app arg def_eq failed", .{});
                     }
@@ -224,16 +224,16 @@ fn inferApp(self: *TypeChecker, depth: u32, e: E, c: C, ex: ExprPtr, comptime fl
 
 fn inferProj(
     self: *TypeChecker,
+    comptime flag: InferFlag,
     depth: u32,
     e: E,
     c: C,
     ty_name: NamePtr,
     idx: usize,
     structure: ExprPtr,
-    comptime flag: InferFlag,
 ) Reject!V {
     _ = ty_name;
-    const struct_ty = try infer(self, depth, e, c, structure, flag);
+    const struct_ty = try infer(self, flag, depth, e, c, structure);
     const struct_ty_f = eval.forceAll(self, depth, struct_ty);
     const struct_ty_is_prop = conv.isPropType(self, depth, struct_ty_f);
     if (struct_ty_f.* != .rigid or struct_ty_f.rigid.head != .inductive) {

@@ -638,7 +638,7 @@ pub fn applyClosure(self: *TypeChecker, depth: u32, clo: *const Closure, v: V, b
         .eval => return eval(self, depth, e, clo.body),
         .infer => {
             const c = value.ctxExtend(self.arena, clo.ctx, binder_ty orelse @panic("apply_closure: infer closure without binder type"));
-            return inference.infer(self, depth, e, c, clo.body, .InferOnly) catch @panic("infer failed in closure application");
+            return inference.infer(self, .InferOnly, depth, e, c, clo.body) catch @panic("infer failed in closure application");
         },
     }
 }
