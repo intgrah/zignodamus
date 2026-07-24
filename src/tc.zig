@@ -78,11 +78,6 @@ pub const TcCache = struct {
     }
 };
 
-pub const InferFlag = enum {
-    InferOnly,
-    Check,
-};
-
 pub const Reject = error{CheckFailed};
 
 var check_failed = std.atomic.Value(bool).init(false);

@@ -12,7 +12,6 @@ const ptr = @import("ptr.zig");
 
 const Closure = value.Closure;
 const Declar = env_mod.Declar;
-const InferFlag = tc.InferFlag;
 const Reject = tc.Reject;
 const RigidHead = value.RigidHead;
 const TypeChecker = tc.TypeChecker;
@@ -22,6 +21,11 @@ const NamePtr = ptr.NamePtr;
 const C = value.C;
 const E = value.E;
 const V = value.V;
+
+const InferFlag = enum {
+    InferOnly,
+    Check,
+};
 
 pub fn checkDeclarInfo(self: *TypeChecker, d: *const Declar) Reject!void {
     const info = d.info();
