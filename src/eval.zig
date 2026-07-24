@@ -1771,3 +1771,53 @@ fn bignumViaForce(self: *TypeChecker, depth: u32, v: V) ?BigUint {
 inline fn eqOpt(opt: ?NamePtr, name: NamePtr) bool {
     return if (opt) |o| o == name else false;
 }
+
+pub fn quote(self: *TypeChecker, depth: u32, v0: V) ExprPtr {
+    const v = forceThunk(self, depth, v0);
+    const key = .{ @intFromPtr(v), depth };
+    if (self.tc_cache.quote_cache.get(key)) |q| {
+        return q;
+    }
+    const r: ExprPtr = switch (v.*) {
+        .sort => |s| TcCtx.mkSort(self.ctx, s.level),
+        .nat_lit => |n| TcCtx.mkNatLit(self.ctx, n.ptr) orelse @panic("quote: nat literal without extension"),
+        .str_lit => |s| TcCtx.mkStringLit(self.ctx, s.ptr) orelse @panic("quote: string literal without extension"),
+        .rigid => |rg| blk: {
+            const head: ExprPtr = switch (rg.head) {
+                .b_var => |b| head: {
+                    util.assert(b.lvl < depth);
+                    break :head TcCtx.mkVar(self.ctx, @intCast(depth - 1 - b.lvl));
+                },
+                .local => |ex| ex,
+                .axiom, .ctor, .recursor, .quot_const, .inductive => |nl| TcCtx.mkConst(self.ctx, nl.name, nl.levels),
+            };
+            break :blk quoteSpine(self, depth, head, rg.spine);
+        },
+        .unfold => |u| quoteSpine(self, depth, TcCtx.mkConst(self.ctx, u.head.name, u.head.levels), u.spine),
+        .lam => |l| blk: {
+            const dom = lamDomain(self, depth, v);
+            const fresh = mkBvarHc(self, depth, dom);
+            const body = applyClosure(self, depth + 1, &v.lam.body, fresh, dom);
+            break :blk TcCtx.mkLambda(self.ctx, l.binder_name, l.binder_style, quote(self, depth, dom), quote(self, depth + 1, body));
+        },
+        .pi => |p| blk: {
+            const fresh = mkBvarHc(self, depth, p.domain);
+            const body = applyClosure(self, depth + 1, &v.pi.body, fresh, p.domain);
+            break :blk TcCtx.mkPi(self.ctx, p.binder_name, p.binder_style, quote(self, depth, p.domain), quote(self, depth + 1, body));
+        },
+        .thunk => @panic("quote: thunk after force"),
+    };
+    self.tc_cache.quote_cache.put(util.smp_allocator, key, r) catch util.oom();
+    return r;
+}
+
+fn quoteSpine(self: *TypeChecker, depth: u32, head: ExprPtr, s: S) ExprPtr {
+    if (s.isEmpty()) {
+        return head;
+    }
+    const prefix = quoteSpine(self, depth, head, s.prev);
+    if (s.elim.isApp()) {
+        return TcCtx.mkApp(self.ctx, prefix, quote(self, depth, s.elim.appV()));
+    }
+    return TcCtx.mkProj(self.ctx, s.elim.projTyName(), s.elim.projIdx(), prefix);
+}

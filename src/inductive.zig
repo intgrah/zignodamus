@@ -1,11 +1,14 @@
 const std = @import("std");
 const name_mod = @import("name.zig");
+const conv = @import("conv.zig");
+const eval = @import("eval.zig");
+const inference = @import("infer.zig");
 const level = @import("level.zig");
 const env = @import("env.zig");
 const expr = @import("expr.zig");
 const tc = @import("tc.zig");
 const util = @import("util.zig");
-const name = @import("name.zig");
+const value = @import("value.zig");
 const Arena = @import("Arena.zig");
 
 const ConstructorData = env.ConstructorData;
@@ -21,7 +24,6 @@ const Env = env.Env;
 const BinderStyle = expr.BinderStyle;
 const Expr = expr.Expr;
 
-const InferFlag = tc.InferFlag;
 const TypeChecker = tc.TypeChecker;
 
 const ExportFile = @import("export_file.zig").ExportFile;
@@ -32,6 +34,68 @@ const LevelPtr = @import("ptr.zig").LevelPtr;
 const LevelsPtr = @import("ptr.zig").LevelsPtr;
 const NamePtr = @import("ptr.zig").NamePtr;
 const TcCtx = @import("TcCtx.zig");
+
+const C = value.C;
+const E = value.E;
+const S = value.S;
+const V = value.V;
+
+const VBinder = struct {
+    name: NamePtr,
+    style: BinderStyle,
+    v: V,
+
+    fn ty(self: VBinder) V {
+        return self.v.rigid.head.b_var.ty;
+    }
+};
+
+const Walk = struct {
+    e: E,
+    c: C,
+    depth: u32,
+
+    const empty: Walk = .{ .e = &value.Env.nil, .c = &value.Ctx.nil, .depth = 0 };
+};
+
+fn walkPush(self: *TypeChecker, w: Walk, v: V, dom: V) Walk {
+    return .{
+        .e = value.envExtend(self.arena, w.e, v),
+        .c = value.ctxExtend(self.arena, w.c, dom),
+        .depth = w.depth + 1,
+    };
+}
+
+fn walkFresh(self: *TypeChecker, w: Walk, dom: V) struct { Walk, V } {
+    const fresh = eval.mkBvarHc(self, w.depth, dom);
+    return .{ walkPush(self, w, fresh, dom), fresh };
+}
+
+fn sortOfValue(self: *TypeChecker, w: Walk, ty_v: V) tc.Reject!LevelPtr {
+    const q = eval.quote(self, w.depth, ty_v);
+    const t = try inference.infer(self, w.depth, w.e, w.c, q, .Check);
+    return inference.ensureSort(self, w.depth, t);
+}
+
+fn piFold(self: *TypeChecker, binders: []const VBinder, domains: []const ExprPtr, body: ExprPtr) ExprPtr {
+    var e = body;
+    var i = binders.len;
+    while (i > 0) {
+        i -= 1;
+        e = TcCtx.mkPi(self.ctx, binders[i].name, binders[i].style, domains[i], e);
+    }
+    return e;
+}
+
+fn lamFold(self: *TypeChecker, binders: []const VBinder, domains: []const ExprPtr, body: ExprPtr) ExprPtr {
+    var e = body;
+    var i = binders.len;
+    while (i > 0) {
+        i -= 1;
+        e = TcCtx.mkLambda(self.ctx, binders[i].name, binders[i].style, domains[i], e);
+    }
+    return e;
+}
 
 fn u16TryFrom(x: usize) u16 {
     if (x > std.math.maxInt(u16)) @panic("u16 overflow");
@@ -46,7 +110,7 @@ pub fn checkInductiveDeclar(self: *const ExportFile, d: *const Declar) void {
         },
         else => @panic("expected inductive"),
     };
-    checkInductiveDeclarChecked(self, d, ind, env_limit) catch tc.fail();
+    checkInductiveDeclarChecked(self, d, ind, env_limit) catch tc.failWithName(d);
 }
 
 fn checkInductiveDeclarChecked(
@@ -66,7 +130,7 @@ fn checkInductiveDeclarChecked(
         defer cache.deinit();
         var tcr = TypeChecker.init(&ctx, &e, &ar, null, &cache);
         defer tcr.deinit();
-        try tc.checkDeclarInfo(&tcr, d);
+        try inference.checkDeclarInfo(&tcr, d);
         break :blk collectUnmodifiedMutuals(&tcr, ind);
     };
 
@@ -89,6 +153,8 @@ fn checkInductiveDeclarChecked(
     }
 
     const ind_ty_ext1 = mkIndTysEnvExt(&ctx, &st);
+    var occ = IndOccurs{ .names = st.ind_names.items };
+    defer occ.deinit();
 
     {
         var e = env.Env.initWithTempExt(&self.declars, &ind_ty_ext1, env_limit);
@@ -96,9 +162,9 @@ fn checkInductiveDeclarChecked(
         defer cache.deinit();
         var tcr = TypeChecker.init(&ctx, &e, &ar, null, &cache);
         defer tcr.deinit();
-        for (st.all_inductives_incl_specialized.items) |*ind_| {
+        for (st.all_inductives_incl_specialized.items, 0..) |*ind_, i| {
             for (ind_.ctors.items) |ctor| {
-                try checkCtor(&tcr, &st, ind_.name, ctor.ty);
+                try checkCtor(&tcr, &st, &occ, i, ctor.ty);
             }
         }
     }
@@ -113,10 +179,9 @@ fn checkInductiveDeclarChecked(
         defer tcr.deinit();
         try mkElimLevel(&tcr, &st);
         initKTarget(&st);
-        mkMajors(&tcr, &st);
-        mkMotives(&tcr, &st);
-        try mkMinors(&tcr, &st);
-        break :blk try mkRecursors(&tcr, &st);
+        try mkMotives(&tcr, &st);
+        try mkMinors(&tcr, &st, &occ);
+        break :blk try mkRecursors(&tcr, &st, &occ);
     };
 
     var recursor_extension = ctor_extension;
@@ -153,8 +218,8 @@ pub fn mkIndTysEnvExt(ctx: *TcCtx, st: *const InductiveCheckState) DeclarMap {
             .info = DeclarInfo{ .name = inductive.name, .ty = inductive.ty, .uparams = st.uparams },
             .is_nested = is_nested_,
             .is_recursive = false,
-            .num_params = u16TryFrom(st.local_params.items.len),
-            .num_indices = u16TryFrom(st.local_indices.items[idx].items.len),
+            .num_params = st.num_params,
+            .num_indices = st.index_counts.items[idx],
             .all_ind_names = all_ind_names_arc,
             .all_ctor_names = ctorNamesArc(ctx, inductive),
         } };
@@ -176,7 +241,7 @@ pub fn mkCtorsEnvExt(ctx: *TcCtx, nest_st: *const InductiveCheckState, env_ext_i
     for (nest_st.all_inductives_incl_specialized.items) |inductive| {
         for (inductive.ctors.items, 0..) |ctor, idx| {
             const info = DeclarInfo{ .name = ctor.name, .ty = ctor.ty, .uparams = nest_st.uparams };
-            const num_params = u16TryFrom(nest_st.local_params.items.len);
+            const num_params = nest_st.num_params;
             const num_fields = expr.piTelescopeSize(ctor.ty) - num_params;
             const d = Declar{ .constructor = ConstructorData{
                 .info = info,
@@ -199,17 +264,21 @@ pub const InductiveCheckState = struct {
     all_inductives_incl_specialized: std.ArrayList(IndTyHeader),
     next_ngen_idx: u64,
     local_params: std.ArrayList(ExprPtr),
-    local_indices: std.ArrayList(std.ArrayList(ExprPtr)),
+    g: Walk,
+    params: std.ArrayList(VBinder),
+    param_ty_exprs: std.ArrayList(ExprPtr),
+    index_counts: std.ArrayList(u16),
+    ind_names: std.ArrayList(NamePtr),
     block_codom: ?LevelPtr,
     is_zero: ?bool,
     is_nonzero: ?bool,
-    ind_consts: std.ArrayList(ExprPtr),
     rec_uparams: ?LevelsPtr,
     elim_level: ?LevelPtr,
     k_target: ?bool,
-    majors: std.ArrayList(ExprPtr),
-    motives: std.ArrayList(ExprPtr),
-    minors: std.ArrayList(std.ArrayList(ExprPtr)),
+    motives: std.ArrayList(VBinder),
+    motive_ty_exprs: std.ArrayList(ExprPtr),
+    minors: std.ArrayList(std.ArrayList(VBinder)),
+    minor_ty_exprs: std.ArrayList(std.ArrayList(ExprPtr)),
 };
 
 fn newState(
@@ -226,19 +295,101 @@ fn newState(
         .all_inductives_incl_specialized = new_tys,
         .next_ngen_idx = 1,
         .local_params = local_params,
-        .local_indices = std.ArrayList(std.ArrayList(ExprPtr)).empty,
+        .g = Walk.empty,
+        .params = std.ArrayList(VBinder).empty,
+        .param_ty_exprs = std.ArrayList(ExprPtr).empty,
+        .index_counts = std.ArrayList(u16).empty,
+        .ind_names = std.ArrayList(NamePtr).empty,
         .block_codom = null,
         .is_zero = null,
         .is_nonzero = null,
-        .ind_consts = std.ArrayList(ExprPtr).empty,
         .rec_uparams = null,
         .elim_level = null,
         .k_target = null,
-        .majors = std.ArrayList(ExprPtr).empty,
-        .motives = std.ArrayList(ExprPtr).empty,
-        .minors = std.ArrayList(std.ArrayList(ExprPtr)).empty,
+        .motives = std.ArrayList(VBinder).empty,
+        .motive_ty_exprs = std.ArrayList(ExprPtr).empty,
+        .minors = std.ArrayList(std.ArrayList(VBinder)).empty,
+        .minor_ty_exprs = std.ArrayList(std.ArrayList(ExprPtr)).empty,
     };
 }
+
+const IndOccurs = struct {
+    names: []const NamePtr,
+    memo: swiss_map.FxHashMap(usize, bool) = .empty,
+
+    fn deinit(self: *IndOccurs) void {
+        self.memo.deinit(util.smp_allocator);
+    }
+
+    fn matches(self: *IndOccurs, n: NamePtr) bool {
+        for (self.names) |m| {
+            if (m == n) return true;
+        }
+        return false;
+    }
+
+    fn pred(self: *IndOccurs, n: NamePtr) bool {
+        return self.matches(n);
+    }
+
+    fn inValue(self: *IndOccurs, tcr: *TypeChecker, depth: u32, v0: V) bool {
+        const v = eval.forceThunk(tcr, depth, v0);
+        if (self.memo.get(@intFromPtr(v))) |b| {
+            return b;
+        }
+        const r = switch (v.*) {
+            .sort, .nat_lit, .str_lit => false,
+            .rigid => |rg| self.inHead(tcr, depth, rg.head) or self.inSpine(tcr, depth, rg.spine),
+            .unfold => |u| self.matches(u.head.name) or self.inSpine(tcr, depth, u.spine),
+            .lam => |l| self.inValue(tcr, depth, eval.lamDomain(tcr, depth, v)) or self.inClosure(tcr, depth, l.body),
+            .pi => |p| self.inValue(tcr, depth, p.domain) or self.inClosure(tcr, depth, p.body),
+            .thunk => @panic("ind occurs: thunk after force"),
+        };
+        self.memo.put(util.smp_allocator, @intFromPtr(v), r) catch util.oom();
+        return r;
+    }
+
+    fn inHead(self: *IndOccurs, tcr: *TypeChecker, depth: u32, head: value.RigidHead) bool {
+        switch (head) {
+            .b_var => |b| return self.inValue(tcr, depth, b.ty),
+            .local => |ex| switch (ex.asRef().kind) {
+                .local => |lo| return self.inExpr(tcr, lo.binder_type),
+                else => @panic("ind occurs: local head without local expr"),
+            },
+            .axiom, .ctor, .recursor, .quot_const, .inductive => |nl| return self.matches(nl.name),
+        }
+    }
+
+    fn inSpine(self: *IndOccurs, tcr: *TypeChecker, depth: u32, s: S) bool {
+        var cur = s;
+        while (!cur.isEmpty()) : (cur = cur.prev) {
+            if (cur.elim.isApp() and self.inValue(tcr, depth, cur.elim.appV())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    fn inClosure(self: *IndOccurs, tcr: *TypeChecker, depth: u32, clo: value.Closure) bool {
+        return self.inExpr(tcr, clo.body) or self.inEnv(tcr, depth, clo.env, clo.body);
+    }
+
+    fn inExpr(self: *IndOccurs, tcr: *TypeChecker, ex: ExprPtr) bool {
+        return expr.findConst(tcr.ctx, ex, self, IndOccurs.pred);
+    }
+
+    fn inEnv(self: *IndOccurs, tcr: *TypeChecker, depth: u32, e: E, ex: ExprPtr) bool {
+        const nlb = ex.numLooseBvars();
+        const mask = ex.asRef().fv_mask;
+        var idx: u16 = 0;
+        while (idx < nlb) : (idx += 1) {
+            if (idx < 64 and (mask >> @intCast(idx)) & 1 == 0) continue;
+            const slot = e.lookup(idx) orelse continue;
+            if (self.inValue(tcr, depth, slot)) return true;
+        }
+        return false;
+    }
+};
 
 fn isNested(self: *const InductiveCheckState) bool {
     return self.nested_to_unspecialized_ty_nofvars.count() != 0;
@@ -267,19 +418,6 @@ fn cloneHeaders(self: *TypeChecker, hs: std.ArrayList(IndTyHeader)) std.ArrayLis
         out.append(self.ctx.bump, cloneHeader(self.ctx, h)) catch util.oom();
     }
     return out;
-}
-
-fn ctorAppParamsOk(ctor_apps: []const ExprPtr, local_params: []const ExprPtr) bool {
-    if (ctor_apps.len < local_params.len) {
-        return false;
-    }
-    var i: usize = 0;
-    while (i < local_params.len) : (i += 1) {
-        if (ctor_apps[i] != local_params[i]) {
-            return false;
-        }
-    }
-    return true;
 }
 
 fn specializeNested(
@@ -359,85 +497,76 @@ fn getLocalParams(self: *TypeChecker, e_in: ExprPtr, num_params: u16) tc.Reject!
     return .{ param_locals, e };
 }
 
-fn checkInductiveSpec0th(self: *TypeChecker, uparams: LevelsPtr, st: *InductiveCheckState) tc.Reject!void {
-    self.tc_cache.clear();
-    const ind0 = st.all_inductives_incl_specialized.items[0];
-    const ind_name = ind0.name;
-    var ind_ty_cursor = ind0.ty;
-    ind_ty_cursor = tc.whnf(self, ind_ty_cursor);
-    var indices_locals = std.ArrayList(ExprPtr).empty;
-    var i: usize = 0;
-    while (ind_ty_cursor.asRef().kind == .pi) {
-        const pi = ind_ty_cursor.asRef().kind.pi;
-        if (i < st.local_params.items.len) {
-            const local_ = st.local_params.items[i];
-            switch (local_.asRef().kind) {
-                .local => |lc| {
-                    self.tc_cache.clear();
-                    try tc.assertDefEq(self, pi.binder_type, lc.binder_type);
-                },
-                else => return tc.reject("malformed inductive type", .{}),
-            }
-            ind_ty_cursor = expr.inst(self.ctx, pi.body, &.{st.local_params.items[i]});
-            ind_ty_cursor = tc.whnf(self, ind_ty_cursor);
-        } else {
-            const local_ = TcCtx.mkUnique(self.ctx, pi.binder_name, pi.binder_style, pi.binder_type);
-            ind_ty_cursor = expr.inst(self.ctx, pi.body, &.{local_});
-            ind_ty_cursor = tc.whnf(self, ind_ty_cursor);
-            indices_locals.append(self.ctx.bump, local_) catch util.oom();
-        }
-        i += 1;
+fn applyParams(self: *TypeChecker, st: *const InductiveCheckState, depth: u32, ty_v: V) tc.Reject!V {
+    var cur = ty_v;
+    for (st.params.items) |pb| {
+        const f = eval.forceAll(self, depth, cur);
+        if (f.* != .pi) return tc.reject("exhausted telescope early", .{});
+        cur = eval.applyClosure(self, depth, &f.pi.body, pb.v, f.pi.domain);
     }
-    const block_codom = try tc.ensureSort(self, ind_ty_cursor);
-    const is_nonzero_ = level.isNonzero(self.ctx, block_codom);
-    const is_zero_ = level.isZero(self.ctx, block_codom);
-    const ind_const = TcCtx.mkConst(self.ctx, ind_name, uparams);
-
-    st.local_indices.append(self.ctx.bump, indices_locals) catch util.oom();
-    st.block_codom = block_codom;
-    st.is_zero = is_zero_;
-    st.is_nonzero = is_nonzero_;
-    st.ind_consts.append(self.ctx.bump, ind_const) catch util.oom();
+    return cur;
 }
 
-fn checkInductiveSpecsMutual1(self: *TypeChecker, st: *InductiveCheckState, ind: IndTyHeader) tc.Reject!void {
-    self.tc_cache.clear();
-    var ind_ty_cursor = tc.whnf(self, ind.ty);
-    var indices_locals = std.ArrayList(ExprPtr).empty;
-    var i: usize = 0;
-    while (ind_ty_cursor.asRef().kind == .pi) {
-        const pi = ind_ty_cursor.asRef().kind.pi;
-        if (i < st.local_params.items.len) {
-            ind_ty_cursor = expr.inst(self.ctx, pi.body, &.{st.local_params.items[i]});
-            ind_ty_cursor = tc.whnf(self, ind_ty_cursor);
-        } else {
-            const local_ = TcCtx.mkUnique(self.ctx, pi.binder_name, pi.binder_style, pi.binder_type);
-            ind_ty_cursor = expr.inst(self.ctx, pi.body, &.{local_});
-            ind_ty_cursor = tc.whnf(self, ind_ty_cursor);
-            indices_locals.append(self.ctx.bump, local_) catch util.oom();
+const IndexTelescope = struct {
+    w: Walk,
+    binders: std.ArrayList(VBinder),
+    domains: std.ArrayList(ExprPtr),
+    codomain: V,
+};
+
+fn openIndicesFrom(self: *TypeChecker, w0: Walk, cur0: V) IndexTelescope {
+    var w = w0;
+    var cur = cur0;
+    var binders = std.ArrayList(VBinder).empty;
+    var domains = std.ArrayList(ExprPtr).empty;
+    while (true) {
+        const f = eval.forceAll(self, w.depth, cur);
+        if (f.* != .pi) {
+            return .{ .w = w, .binders = binders, .domains = domains, .codomain = f };
         }
-        i += 1;
+        const dom = f.pi.domain;
+        domains.append(self.ctx.bump, eval.quote(self, w.depth, dom)) catch util.oom();
+        const pushed, const fresh = walkFresh(self, w, dom);
+        cur = eval.applyClosure(self, w.depth + 1, &f.pi.body, fresh, dom);
+        binders.append(self.ctx.bump, VBinder{ .name = f.pi.binder_name, .style = f.pi.binder_style, .v = fresh }) catch util.oom();
+        w = pushed;
     }
-    const codom_level = try tc.ensureSort(self, ind_ty_cursor);
-    util.assert(level.eqAntisymm(self.ctx, codom_level, st.block_codom.?));
-    st.local_indices.append(self.ctx.bump, indices_locals) catch util.oom();
-    st.ind_consts.append(self.ctx.bump, TcCtx.mkConst(self.ctx, ind.name, st.uparams)) catch util.oom();
+}
+
+fn openIndices(self: *TypeChecker, st: *const InductiveCheckState, w0: Walk, ind_ty: ExprPtr) tc.Reject!IndexTelescope {
+    const cur = try applyParams(self, st, w0.depth, eval.eval(self, w0.depth, value.envEmpty(), ind_ty));
+    return openIndicesFrom(self, w0, cur);
 }
 
 fn checkInductiveSpecs(self: *TypeChecker, st: *InductiveCheckState) tc.Reject!void {
-    const nbefore = st.all_inductives_incl_specialized.items.len;
-    var i: usize = 0;
-    while (i < st.all_inductives_incl_specialized.items.len) : (i += 1) {
+    for (st.all_inductives_incl_specialized.items, 0..) |ind, i| {
         if (i == 0) {
-            try checkInductiveSpec0th(self, st.uparams, st);
-            util.assert(st.local_indices.items.len == 1);
+            var cur = eval.eval(self, 0, value.envEmpty(), ind.ty);
+            var j: u16 = 0;
+            while (j < st.num_params) : (j += 1) {
+                const f = eval.forceAll(self, st.g.depth, cur);
+                if (f.* != .pi) return tc.reject("exhausted telescope early", .{});
+                const dom = f.pi.domain;
+                st.param_ty_exprs.append(self.ctx.bump, eval.quote(self, st.g.depth, dom)) catch util.oom();
+                const pushed, const fresh = walkFresh(self, st.g, dom);
+                cur = eval.applyClosure(self, st.g.depth + 1, &f.pi.body, fresh, dom);
+                st.params.append(self.ctx.bump, VBinder{ .name = f.pi.binder_name, .style = f.pi.binder_style, .v = fresh }) catch util.oom();
+                st.g = pushed;
+            }
+            const it = openIndicesFrom(self, st.g, cur);
+            const block_codom = try inference.ensureSort(self, it.w.depth, it.codomain);
+            st.block_codom = block_codom;
+            st.is_zero = level.isZero(self.ctx, block_codom);
+            st.is_nonzero = level.isNonzero(self.ctx, block_codom);
+            st.index_counts.append(self.ctx.bump, u16TryFrom(it.binders.items.len)) catch util.oom();
         } else {
-            util.assert(st.local_indices.items.len == i);
-            try checkInductiveSpecsMutual1(self, st, cloneHeader(self.ctx, st.all_inductives_incl_specialized.items[i]));
+            const it = try openIndices(self, st, st.g, ind.ty);
+            const codom_level = try inference.ensureSort(self, it.w.depth, it.codomain);
+            util.assert(level.eqAntisymm(self.ctx, codom_level, st.block_codom.?));
+            st.index_counts.append(self.ctx.bump, u16TryFrom(it.binders.items.len)) catch util.oom();
         }
+        st.ind_names.append(self.ctx.bump, ind.name) catch util.oom();
     }
-    util.assert(st.all_inductives_incl_specialized.items.len == nbefore);
-    util.assert(st.all_inductives_incl_specialized.items.len == st.local_indices.items.len);
 }
 
 fn isNestedIndApp(self: *TypeChecker, st: *const InductiveCheckState, e: ExprPtr) tc.Reject!?InductiveData {
@@ -639,198 +768,143 @@ fn replaceAllNested(
     }
 }
 
-fn checkPositivity1(self: *TypeChecker, st: *const InductiveCheckState, ctor_type_cursor_in: ExprPtr) tc.Reject!void {
-    var ctor_type_cursor = ctor_type_cursor_in;
-    while (true) {
-        ctor_type_cursor = tc.whnf(self, ctor_type_cursor);
-        if (!hasIndOcc(self, ctor_type_cursor, st.ind_consts.items)) {
-            return;
-        }
-        switch (ctor_type_cursor.asRef().kind) {
-            .pi => |pi| {
-                if (hasIndOcc(self, pi.binder_type, st.ind_consts.items)) {
-                    return tc.reject("non-positive occurrence in inductive", .{});
-                }
-                const local = TcCtx.mkUnique(self.ctx, pi.binder_name, pi.binder_style, pi.binder_type);
-                ctor_type_cursor = expr.inst(self.ctx, pi.body, &.{local});
-            },
-            else => {
-                if ((try whichValidIndApp(self, st, ctor_type_cursor)) == null) {
-                    return tc.reject("expected a valid application of an inductive type", .{});
-                }
-                return;
-            },
-        }
-    }
+const IndApp = struct {
+    pos: usize,
+    indices: []const V,
+};
+
+fn isBvarAt(v: V, lvl: u32) bool {
+    return v.* == .rigid and v.rigid.head == .b_var and v.rigid.head.b_var.lvl == lvl and v.rigid.spine.isEmpty();
 }
 
-fn isValidIndApp(
-    self: *TypeChecker,
-    st: *const InductiveCheckState,
-    parent_ind_name: NamePtr,
-    ind_ty_app: ExprPtr,
-) tc.Reject!bool {
-    const unfolded = expr.unfoldApps(self.ctx.bump, ind_ty_app);
-    const base_const = unfolded.fun;
-    const ctor_apps = unfolded.args;
-    const ind_name, const appd_levels = switch (base_const.asRef().kind) {
-        .@"const" => |co| if (co.name == parent_ind_name) .{ co.name, co.levels } else return false,
-        else => return false,
-    };
-    var ind_name_pos: ?usize = null;
-    for (st.ind_consts.items, 0..) |x, idx| {
-        const matches = switch (x.asRef().kind) {
-            .@"const" => |co| co.name == ind_name,
-            else => return tc.reject("malformed constructor type", .{}),
-        };
-        if (matches) {
-            ind_name_pos = idx;
+fn validIndApp(self: *TypeChecker, st: *const InductiveCheckState, occ: *IndOccurs, depth: u32, v: V) ?IndApp {
+    const f = eval.forceAll(self, depth, v);
+    if (f.* != .rigid or f.rigid.head != .inductive) return null;
+    const nl = f.rigid.head.inductive;
+    var pos: ?usize = null;
+    for (st.ind_names.items, 0..) |n, i| {
+        if (n == nl.name) {
+            pos = i;
             break;
         }
     }
-    const pos = ind_name_pos.?;
-    switch (st.ind_consts.items[pos].asRef().kind) {
-        .@"const" => |co| {
-            const lhs = appd_levels.asRef();
-            const rhs = co.levels.asRef();
-            if (lhs.len != rhs.len) {
-                return false;
-            }
-            var i: usize = 0;
-            while (i < lhs.len) : (i += 1) {
-                if (!level.eqAntisymm(self.ctx, lhs[i], rhs[i])) {
-                    return false;
-                }
-            }
-        },
-        else => return false,
+    const p = pos orelse return null;
+    const lhs = nl.levels.asRef();
+    const rhs = st.uparams.asRef();
+    if (lhs.len != rhs.len) return null;
+    for (lhs, rhs) |a, b| {
+        if (!level.eqAntisymm(self.ctx, a, b)) return null;
     }
-    const ind_name_num_indices = st.local_indices.items[pos].items.len;
-
-    if (ctor_apps.items.len != (st.local_params.items.len + ind_name_num_indices)) {
-        return false;
+    const nidx: u32 = st.index_counts.items[p];
+    if (f.rigid.spine.length != @as(u32, st.num_params) + nidx) return null;
+    const args = eval.spineApps(self, depth, f.rigid.spine) orelse return null;
+    for (st.params.items, 0..) |pb, i| {
+        if (!isBvarAt(args[i], pb.v.rigid.head.b_var.lvl)) return null;
     }
-    for (ctor_apps.items[st.local_params.items.len..]) |index_app| {
-        if (hasIndOcc(self, index_app, st.ind_consts.items)) {
-            return false;
-        }
+    const indices = args[st.num_params..];
+    for (indices) |ix| {
+        if (occ.inValue(self, depth, ix)) return null;
     }
-    return ctorAppParamsOk(ctor_apps.items, st.local_params.items);
+    return IndApp{ .pos = p, .indices = indices };
 }
 
-fn hasIndOcc(self: *TypeChecker, e: ExprPtr, haystack: []const ExprPtr) bool {
-    const FindCtx = struct {
-        haystack: []const ExprPtr,
-        ctx: *TcCtx,
-        fn pred(fc: *@This(), nptr: NamePtr) bool {
-            for (fc.haystack) |c| {
-                switch (c.asRef().kind) {
-                    .@"const" => |co| if (co.name == nptr) return true,
-                    else => @panic("malformed constructor type"),
-                }
+fn checkPositivity(self: *TypeChecker, st: *const InductiveCheckState, occ: *IndOccurs, w0: Walk, ty_v: V) tc.Reject!void {
+    var w = w0;
+    var cur = ty_v;
+    while (true) {
+        const f = eval.forceAll(self, w.depth, cur);
+        if (!occ.inValue(self, w.depth, f)) {
+            return;
+        }
+        if (f.* != .pi) {
+            if (validIndApp(self, st, occ, w.depth, f) == null) {
+                return tc.reject("expected a valid application of an inductive type", .{});
             }
-            return false;
+            return;
         }
-    };
-    var fc = FindCtx{ .haystack = haystack, .ctx = self.ctx };
-    return expr.findConst(self.ctx, e, &fc, FindCtx.pred);
-}
-
-fn getIIndices(self: *TypeChecker, st: *const InductiveCheckState, ind_ty_app: ExprPtr) tc.Reject!struct { usize, std.ArrayList(ExprPtr) } {
-    const valid_app_idx = (try whichValidIndApp(self, st, ind_ty_app)).?;
-    const unfolded = expr.unfoldAppsStack(self.ctx.bump, ind_ty_app);
-    var ctor_args_wo_params = unfolded.args;
-    var i: usize = 0;
-    while (i < st.local_params.items.len) : (i += 1) {
-        _ = ctor_args_wo_params.pop();
-    }
-    return .{ valid_app_idx, ctor_args_wo_params };
-}
-
-fn whichValidIndApp(self: *TypeChecker, st: *const InductiveCheckState, u_i_ty: ExprPtr) tc.Reject!?usize {
-    for (st.ind_consts.items, 0..) |ind_const, i| {
-        const ind_name = switch (ind_const.asRef().kind) {
-            .@"const" => |co| co.name,
-            else => return tc.reject("malformed constructor type", .{}),
-        };
-        if (try isValidIndApp(self, st, ind_name, u_i_ty)) {
-            return i;
+        const dom = f.pi.domain;
+        if (occ.inValue(self, w.depth, dom)) {
+            return tc.reject("non-positive occurrence in inductive", .{});
         }
+        const pushed, const fresh = walkFresh(self, w, dom);
+        cur = eval.applyClosure(self, w.depth + 1, &f.pi.body, fresh, dom);
+        w = pushed;
     }
-    return null;
 }
 
 pub fn checkCtor(
     self: *TypeChecker,
     st: *const InductiveCheckState,
-    parent_ind_name: NamePtr,
-    ctor_type_cursor_in: ExprPtr,
+    occ: *IndOccurs,
+    parent_idx: usize,
+    ctor_ty: ExprPtr,
 ) tc.Reject!void {
-    var ctor_type_cursor = ctor_type_cursor_in;
-    self.tc_cache.clear();
-    var i: usize = 0;
-    while (i < st.local_params.items.len) : (i += 1) {
-        const local_param = st.local_params.items[i];
-        const pair = .{ ctor_type_cursor.asRef().kind, local_param.asRef().kind };
-        switch (pair[0]) {
-            .pi => |pi| switch (pair[1]) {
-                .local => |lc| {
-                    try tc.assertDefEq(self, pi.binder_type, lc.binder_type);
-                    ctor_type_cursor = expr.inst(self.ctx, pi.body, &.{local_param});
-                },
-                else => return tc.reject("malformed constructor type", .{}),
-            },
-            else => return tc.reject("malformed constructor type", .{}),
+    var w = Walk.empty;
+    var cur = eval.eval(self, 0, value.envEmpty(), ctor_ty);
+    for (st.params.items) |pb| {
+        const f = eval.forceAll(self, w.depth, cur);
+        if (f.* != .pi) return tc.reject("malformed constructor type", .{});
+        if (!conv.defEqAt(self, w.depth, f.pi.domain, pb.ty())) {
+            return tc.reject("malformed constructor type", .{});
         }
+        cur = eval.applyClosure(self, w.depth, &f.pi.body, pb.v, f.pi.domain);
+        w = walkPush(self, w, pb.v, pb.ty());
     }
-    while (ctor_type_cursor.asRef().kind == .pi) {
-        const pi = ctor_type_cursor.asRef().kind.pi;
-        const s = try tc.ensureInfersAsSort(self, pi.binder_type);
+    while (true) {
+        const f = eval.forceAll(self, w.depth, cur);
+        if (f.* != .pi) {
+            cur = f;
+            break;
+        }
+        const dom = f.pi.domain;
+        const s = try sortOfValue(self, w, dom);
         if (!(st.is_zero.? or level.leq(self.ctx, s, st.block_codom.?))) {
             return tc.reject("constructor argument too large for its inductive type", .{});
         }
-
-        try checkPositivity1(self, st, pi.binder_type);
-        const local = TcCtx.mkUnique(self.ctx, pi.binder_name, pi.binder_style, pi.binder_type);
-        ctor_type_cursor = expr.inst(self.ctx, pi.body, &.{local});
+        try checkPositivity(self, st, occ, w, dom);
+        const pushed, const fresh = walkFresh(self, w, dom);
+        cur = eval.applyClosure(self, w.depth + 1, &f.pi.body, fresh, dom);
+        w = pushed;
     }
-    if (!try isValidIndApp(self, st, parent_ind_name, ctor_type_cursor)) {
+    const app = validIndApp(self, st, occ, w.depth, cur) orelse
+        return tc.reject("expected a valid application of an inductive type", .{});
+    if (app.pos != parent_idx) {
         return tc.reject("constructor must target its own inductive type", .{});
     }
 }
 
-fn largeElimTestAux(self: *TypeChecker, ctor_type_cursor_in: ExprPtr, rem_params_in: usize) tc.Reject!bool {
-    var ctor_type_cursor = ctor_type_cursor_in;
-    var rem_params = rem_params_in;
-    self.tc_cache.clear();
-    var non_prop_ctor_telescope_elems = std.ArrayList(ExprPtr).empty;
-    loop: while (true) {
-        switch (ctor_type_cursor.asRef().kind) {
-            .pi => |pi| {
-                if (rem_params != 0) {
-                    const local = TcCtx.mkUnique(self.ctx, pi.binder_name, pi.binder_style, pi.binder_type);
-                    ctor_type_cursor = expr.inst(self.ctx, pi.body, &.{local});
-                    rem_params -= 1;
-                } else {
-                    const local = TcCtx.mkUnique(self.ctx, pi.binder_name, pi.binder_style, pi.binder_type);
-                    ctor_type_cursor = expr.inst(self.ctx, pi.body, &.{local});
-                    const binder_type_level = try tc.ensureInfersAsSort(self, pi.binder_type);
-                    if (!level.isZero(self.ctx, binder_type_level)) {
-                        non_prop_ctor_telescope_elems.append(self.ctx.bump, local) catch util.oom();
-                    }
-                }
-            },
-            else => break :loop,
+fn largeElimTestAux(self: *TypeChecker, st: *const InductiveCheckState, ctor_ty: ExprPtr) tc.Reject!bool {
+    var w = Walk.empty;
+    var cur = eval.eval(self, 0, value.envEmpty(), ctor_ty);
+    var rem_params: u16 = st.num_params;
+    var non_prop_fields = std.ArrayList(V).empty;
+    while (true) {
+        const f = eval.forceAll(self, w.depth, cur);
+        if (f.* != .pi) {
+            cur = f;
+            break;
         }
+        const dom = f.pi.domain;
+        const pushed, const fresh = walkFresh(self, w, dom);
+        cur = eval.applyClosure(self, w.depth + 1, &f.pi.body, fresh, dom);
+        if (rem_params > 0) {
+            rem_params -= 1;
+        } else {
+            const s = try sortOfValue(self, w, dom);
+            if (!level.isZero(self.ctx, s)) {
+                non_prop_fields.append(self.ctx.bump, fresh) catch util.oom();
+            }
+        }
+        w = pushed;
     }
-
-    const unfolded = expr.unfoldApps(self.ctx.bump, ctor_type_cursor);
-    const ind_ty_params_and_indices = unfolded.args;
-
-    for (non_prop_ctor_telescope_elems.items) |arg| {
+    const args: []const V = if (cur.* == .rigid)
+        eval.spineApps(self, w.depth, cur.rigid.spine) orelse &.{}
+    else
+        &.{};
+    for (non_prop_fields.items) |field| {
         var contained = false;
-        for (ind_ty_params_and_indices.items) |x| {
-            if (x == arg) {
+        for (args) |a| {
+            if (isBvarAt(a, field.rigid.head.b_var.lvl)) {
                 contained = true;
                 break;
             }
@@ -849,12 +923,11 @@ fn largeElimTest(self: *TypeChecker, st: *const InductiveCheckState) tc.Reject!b
     if (inds.len == 0) {
         return tc.reject("inductive declaration with no types", .{});
     } else if (inds.len == 1) {
-        const ind_ty = inds[0];
-        const ctors = ind_ty.ctors.items;
+        const ctors = inds[0].ctors.items;
         if (ctors.len == 0) {
             return true;
         } else if (ctors.len == 1) {
-            return try largeElimTestAux(self, ctors[0].ty, st.local_params.items.len);
+            return try largeElimTestAux(self, st, ctors[0].ty);
         } else {
             return false;
         }
@@ -904,7 +977,7 @@ fn initKTarget(st: *InductiveCheckState) void {
     const ctor_cond = inds.len == 1 and blk: {
         const ctors = inds[0].ctors.items;
         if (ctors.len == 1) {
-            break :blk @as(usize, expr.piTelescopeSize(ctors[0].ty)) == st.local_params.items.len;
+            break :blk expr.piTelescopeSize(ctors[0].ty) == st.num_params;
         } else {
             break :blk false;
         }
@@ -913,261 +986,257 @@ fn initKTarget(st: *InductiveCheckState) void {
     st.k_target = is_k_target;
 }
 
-fn mkMajors(self: *TypeChecker, st: *InductiveCheckState) void {
-    for (st.ind_consts.items, 0..) |ind_const, idx| {
-        var ty = expr.foldlApps(self.ctx, ind_const, st.local_params.items);
-        ty = expr.foldlApps(self.ctx, ty, st.local_indices.items[idx].items);
-        const t = TcCtx.str1(self.ctx, "t");
-        st.majors.append(self.ctx.bump, TcCtx.mkUnique(self.ctx, t, BinderStyle.default, ty)) catch util.oom();
+fn pushGlobal(self: *TypeChecker, st: *InductiveCheckState, binder_name: NamePtr, style: BinderStyle, ty_expr: ExprPtr) VBinder {
+    const ty_v = eval.eval(self, st.g.depth, st.g.e, ty_expr);
+    const fresh = eval.mkBvarHc(self, st.g.depth, ty_v);
+    st.g = walkPush(self, st.g, fresh, ty_v);
+    return VBinder{ .name = binder_name, .style = style, .v = fresh };
+}
+
+fn indApp(self: *TypeChecker, st: *const InductiveCheckState, depth: u32, pos: usize, indices: []const VBinder) V {
+    var v = value.mkRigidHeadWithEmpty(
+        self.arena,
+        .{ .inductive = .{ .name = st.ind_names.items[pos], .levels = st.uparams } },
+        value.spineEmpty(),
+    );
+    for (st.params.items) |pb| {
+        v = eval.apply(self, depth, v, pb.v);
+    }
+    for (indices) |ib| {
+        v = eval.apply(self, depth, v, ib.v);
+    }
+    return v;
+}
+
+fn mkMotives(self: *TypeChecker, st: *InductiveCheckState) tc.Reject!void {
+    const multiple = st.all_inductives_incl_specialized.items.len > 1;
+    const motive_base_name = TcCtx.str1(self.ctx, "motive");
+    const t_name = TcCtx.str1(self.ctx, "t");
+    for (st.all_inductives_incl_specialized.items, 0..) |ind, i| {
+        const it = try openIndices(self, st, st.g, ind.ty);
+        const major_dom = indApp(self, st, it.w.depth, i, it.binders.items);
+        var e = TcCtx.mkSort(self.ctx, st.elim_level.?);
+        e = TcCtx.mkPi(self.ctx, t_name, .default, eval.quote(self, it.w.depth, major_dom), e);
+        e = piFold(self, it.binders.items, it.domains.items, e);
+        const motive_name = if (multiple)
+            name_mod.appendIndexAfter(self.ctx, motive_base_name, @as(u64, @intCast(i)) + 1)
+        else
+            motive_base_name;
+        const b = pushGlobal(self, st, motive_name, .implicit, e);
+        st.motives.append(self.ctx.bump, b) catch util.oom();
+        st.motive_ty_exprs.append(self.ctx.bump, e) catch util.oom();
     }
 }
 
-fn mkMotiveDep(self: *TypeChecker, st: *const InductiveCheckState, major: ExprPtr, ind_type_idx: u64) ExprPtr {
-    const elim_sort = TcCtx.mkSort(self.ctx, st.elim_level.?);
-    const w_major = expr.abstrPi(self.ctx, major, elim_sort);
-    const motive_type = expr.abstrPiTelescope(self.ctx, st.local_indices.items[@intCast(ind_type_idx)].items, w_major);
-    const motive_name_base = TcCtx.str1(self.ctx, "motive");
-    const motive_name = if (st.all_inductives_incl_specialized.items.len > 1)
-        name_mod.appendIndexAfter(self.ctx, motive_name_base, ind_type_idx + 1)
-    else
-        motive_name_base;
-
-    return TcCtx.mkUnique(self.ctx, motive_name, BinderStyle.implicit, motive_type);
-}
-
-fn mkMotives(self: *TypeChecker, st: *InductiveCheckState) void {
-    std.debug.assert(st.local_indices.items.len == st.ind_consts.items.len);
-    std.debug.assert(st.majors.items.len == st.ind_consts.items.len);
-    var i: usize = 0;
-    while (i < st.ind_consts.items.len) : (i += 1) {
-        const major = st.majors.items[i];
-        st.motives.append(self.ctx.bump, mkMotiveDep(self, st, major, @as(u64, i))) catch util.oom();
-    }
-}
-
-fn isRecArgument(self: *TypeChecker, st: *const InductiveCheckState, ctor_btype_cursor_in: ExprPtr) tc.Reject!?usize {
-    var ctor_btype_cursor = tc.whnf(self, ctor_btype_cursor_in);
-    if (ctor_btype_cursor.asRef().kind == .pi) {
-        const pi = ctor_btype_cursor.asRef().kind.pi;
-        const local = TcCtx.mkUnique(self.ctx, pi.binder_name, pi.binder_style, pi.binder_type);
-        ctor_btype_cursor = expr.inst(self.ctx, pi.body, &.{local});
-        return isRecArgument(self, st, ctor_btype_cursor);
-    } else {
-        return try whichValidIndApp(self, st, ctor_btype_cursor);
-    }
-}
-
-fn handleRecArgsAux(self: *TypeChecker, rec_arg_cursor_in: ExprPtr) tc.Reject!struct { ExprPtr, std.ArrayList(ExprPtr) } {
-    var rec_arg_cursor = rec_arg_cursor_in;
-    var xs = std.ArrayList(ExprPtr).empty;
-    while (rec_arg_cursor.asRef().kind == .pi) {
-        const pi = rec_arg_cursor.asRef().kind.pi;
-        const local = TcCtx.mkUnique(self.ctx, pi.binder_name, pi.binder_style, pi.binder_type);
-        rec_arg_cursor = expr.inst(self.ctx, pi.body, &.{local});
-        rec_arg_cursor = tc.whnf(self, rec_arg_cursor);
-        xs.append(self.ctx.bump, local) catch util.oom();
-    }
-    return .{ rec_arg_cursor, xs };
-}
-
-fn sepNonrecRecCtorArgs(
-    self: *TypeChecker,
-    st: *const InductiveCheckState,
-    ctor_type_cursor_in: ExprPtr,
-    rem_params: []const ExprPtr,
-) tc.Reject!struct { ExprPtr, std.ArrayList(ExprPtr), std.ArrayList(ExprPtr) } {
-    var ctor_type_cursor = ctor_type_cursor_in;
-    var all_args = std.ArrayList(ExprPtr).empty;
-    var rec_args = std.ArrayList(ExprPtr).empty;
-    self.tc_cache.clear();
-    var i: usize = 0;
-    while (i < st.local_params.items.len) : (i += 1) {
-        switch (ctor_type_cursor.asRef().kind) {
-            .pi => |pi| {
-                const local_param = rem_params[i];
-                ctor_type_cursor = expr.inst(self.ctx, pi.body, &.{local_param});
-            },
-            else => return tc.reject("malformed constructor telescope", .{}),
+fn isRecField(self: *TypeChecker, st: *const InductiveCheckState, occ: *IndOccurs, w0: Walk, dom0: V) bool {
+    var w = w0;
+    var cur = dom0;
+    while (true) {
+        const f = eval.forceAll(self, w.depth, cur);
+        if (f.* != .pi) {
+            return validIndApp(self, st, occ, w.depth, f) != null;
         }
+        const dom = f.pi.domain;
+        const pushed, const fresh = walkFresh(self, w, dom);
+        cur = eval.applyClosure(self, w.depth + 1, &f.pi.body, fresh, dom);
+        w = pushed;
     }
-    while (ctor_type_cursor.asRef().kind == .pi) {
-        const pi = ctor_type_cursor.asRef().kind.pi;
-        const local = TcCtx.mkUnique(self.ctx, pi.binder_name, pi.binder_style, pi.binder_type);
-        ctor_type_cursor = expr.inst(self.ctx, pi.body, &.{local});
-        all_args.append(self.ctx.bump, local) catch util.oom();
-        if ((try isRecArgument(self, st, pi.binder_type)) != null) {
-            rec_args.append(self.ctx.bump, local) catch util.oom();
+}
+
+const CtorTelescope = struct {
+    w: Walk,
+    fields: std.ArrayList(VBinder),
+    domains: std.ArrayList(ExprPtr),
+    rec_fields: std.ArrayList(usize),
+    app: IndApp,
+};
+
+fn openCtorFields(self: *TypeChecker, st: *const InductiveCheckState, occ: *IndOccurs, w0: Walk, ctor_ty: ExprPtr) tc.Reject!CtorTelescope {
+    var w = w0;
+    var cur = try applyParams(self, st, w.depth, eval.eval(self, w.depth, value.envEmpty(), ctor_ty));
+    var fields = std.ArrayList(VBinder).empty;
+    var domains = std.ArrayList(ExprPtr).empty;
+    var rec_fields = std.ArrayList(usize).empty;
+    while (true) {
+        const f = eval.forceAll(self, w.depth, cur);
+        if (f.* != .pi) {
+            cur = f;
+            break;
         }
-    }
-    return .{ ctor_type_cursor, all_args, rec_args };
-}
-
-fn handleRecArgsMinor(
-    self: *TypeChecker,
-    st: *const InductiveCheckState,
-    ctor_idx: usize,
-    rec_args: []const ExprPtr,
-) tc.Reject!std.ArrayList(ExprPtr) {
-    var out = std.ArrayList(ExprPtr).empty;
-    for (rec_args, 0..) |rec_arg, i| {
-        self.tc_cache.clear();
-        const u_i_ty = try tc.inferThenWhnf(self, rec_arg, InferFlag.InferOnly);
-        const hra = try handleRecArgsAux(self, u_i_ty);
-        const arg_ty = hra[0];
-        const xs = hra[1];
-        const gii = try getIIndices(self, st, arg_ty);
-        const ind_ty_idx = gii[0];
-        const applied_indices = gii[1];
-        const motive = st.motives.items[ind_ty_idx];
-        const motive_base = blk: {
-            const lhs = expr.foldlApps(self.ctx, motive, revSlice(self.ctx, applied_indices.items));
-            const u_app = expr.foldlApps(self.ctx, rec_arg, xs.items);
-            break :blk TcCtx.mkApp(self.ctx, lhs, u_app);
-        };
-        const v_i_ty = expr.abstrPis(self.ctx, xs.items, motive_base);
-        var v_name = TcCtx.str1(self.ctx, "v");
-        v_name = name_mod.appendIndexAfter(self.ctx, v_name, @as(u64, ctor_idx));
-        v_name = name_mod.appendIndexAfter(self.ctx, v_name, @as(u64, i));
-        const v_i = TcCtx.mkUnique(self.ctx, v_name, BinderStyle.default, v_i_ty);
-        out.append(self.ctx.bump, v_i) catch util.oom();
-    }
-    return out;
-}
-
-fn revSlice(ctx: *TcCtx, s: []const ExprPtr) []const ExprPtr {
-    var out = std.ArrayList(ExprPtr).empty;
-    var i: usize = s.len;
-    while (i > 0) {
-        i -= 1;
-        out.append(ctx.bump, s[i]) catch util.oom();
-    }
-    return out.items;
-}
-
-fn mkMinors1group(self: *TypeChecker, st: *const InductiveCheckState, ctors: []const CtorHeader) tc.Reject!std.ArrayList(ExprPtr) {
-    var out = std.ArrayList(ExprPtr).empty;
-    for (ctors, 0..) |ctor, ctor_idx| {
-        const sep = try sepNonrecRecCtorArgs(self, st, ctor.ty, st.local_params.items);
-        const stripd_instd_ctor_type = sep[0];
-        const all_ctor_args = sep[1];
-        const rec_ctor_args = sep[2];
-        const gii = try getIIndices(self, st, stripd_instd_ctor_type);
-        const ind_ty_idx = gii[0];
-        const applied_indices = gii[1];
-        const motive = st.motives.items[ind_ty_idx];
-        const c_app0 = blk: {
-            var rhs = TcCtx.mkConst(self.ctx, ctor.name, st.uparams);
-            rhs = expr.foldlApps(self.ctx, rhs, st.local_params.items);
-            break :blk expr.foldlApps(self.ctx, rhs, all_ctor_args.items);
-        };
-        var c_app = expr.foldlApps(self.ctx, motive, revSlice(self.ctx, applied_indices.items));
-        c_app = TcCtx.mkApp(self.ctx, c_app, c_app0);
-        const v = try handleRecArgsMinor(self, st, ctor_idx, rec_ctor_args.items);
-
-        var minor_type = expr.abstrPis(self.ctx, v.items, c_app);
-        minor_type = expr.abstrPis(self.ctx, all_ctor_args.items, minor_type);
-        const minor_name = switch (ctor.name.asRef().kind) {
-            .str => |s| TcCtx.str(self.ctx, TcCtx.anonymous(self.ctx), s.sfx),
-            else => blk: {
-                const minor_name = TcCtx.str1(self.ctx, "m");
-                break :blk name_mod.appendIndexAfter(self.ctx, minor_name, @as(u64, ctor_idx));
-            },
-        };
-        const minor = TcCtx.mkUnique(self.ctx, minor_name, BinderStyle.default, minor_type);
-        out.append(self.ctx.bump, minor) catch util.oom();
-    }
-    return out;
-}
-
-fn mkMinors(self: *TypeChecker, st: *InductiveCheckState) tc.Reject!void {
-    util.assert(st.all_inductives_incl_specialized.items.len == st.ind_consts.items.len);
-    for (st.all_inductives_incl_specialized.items) |ind_ty| {
-        st.minors.append(self.ctx.bump, try mkMinors1group(self, st, ind_ty.ctors.items)) catch util.oom();
-    }
-}
-
-fn flatMapMinors(ctx: *TcCtx, st: *const InductiveCheckState) std.ArrayList(ExprPtr) {
-    var out = std.ArrayList(ExprPtr).empty;
-    for (st.minors.items) |v| {
-        for (v.items) |x| {
-            out.append(ctx.bump, x) catch util.oom();
+        const dom = f.pi.domain;
+        domains.append(self.ctx.bump, eval.quote(self, w.depth, dom)) catch util.oom();
+        if (isRecField(self, st, occ, w, dom)) {
+            rec_fields.append(self.ctx.bump, fields.items.len) catch util.oom();
         }
+        const pushed, const fresh = walkFresh(self, w, dom);
+        cur = eval.applyClosure(self, w.depth + 1, &f.pi.body, fresh, dom);
+        fields.append(self.ctx.bump, VBinder{ .name = f.pi.binder_name, .style = f.pi.binder_style, .v = fresh }) catch util.oom();
+        w = pushed;
     }
-    return out;
+    const app = validIndApp(self, st, occ, w.depth, cur).?;
+    return .{ .w = w, .fields = fields, .domains = domains, .rec_fields = rec_fields, .app = app };
 }
 
-fn handleRecCtorArgsRecRule(
-    self: *TypeChecker,
-    st: *const InductiveCheckState,
-    rec_ctor_args: []const ExprPtr,
-) tc.Reject!std.ArrayList(ExprPtr) {
-    var out = std.ArrayList(ExprPtr).empty;
-    const rec_str_ptr = TcCtx.allocString(self.ctx, "rec");
-    const flat_mapped_minors = flatMapMinors(self.ctx, st);
-    for (rec_ctor_args) |rec_ctor_arg| {
-        self.tc_cache.clear();
-        const u_i_ty0 = try tc.inferThenWhnf(self, rec_ctor_arg, InferFlag.InferOnly);
-        const hra = try handleRecArgsAux(self, u_i_ty0);
-        const u_i_ty = hra[0];
-        const xs = hra[1];
-        const gii = try getIIndices(self, st, u_i_ty);
-        const it_idx = gii[0];
-        const applied_indices = gii[1];
-        const it_name = st.all_inductives_incl_specialized.items[it_idx].name;
-        const rec_name = TcCtx.str(self.ctx, it_name, rec_str_ptr);
-        const rec_app = TcCtx.mkConst(self.ctx, rec_name, st.rec_uparams.?);
-        var app = expr.foldlApps(self.ctx, rec_app, st.local_params.items);
-        app = expr.foldlApps(self.ctx, app, st.motives.items);
-        app = expr.foldlApps(self.ctx, app, flat_mapped_minors.items);
-        app = expr.foldlApps(self.ctx, app, revSlice(self.ctx, applied_indices.items));
-        const app_rhs = expr.foldlApps(self.ctx, rec_ctor_arg, xs.items);
-        app = TcCtx.mkApp(self.ctx, app, app_rhs);
-        const v_hd = expr.abstrLambdaTelescope(self.ctx, xs.items, app);
-        out.append(self.ctx.bump, v_hd) catch util.oom();
+const RecFieldType = struct {
+    w: Walk,
+    xs: std.ArrayList(VBinder),
+    domains: std.ArrayList(ExprPtr),
+    app: IndApp,
+    applied: V,
+};
+
+fn openRecFieldType(self: *TypeChecker, st: *const InductiveCheckState, occ: *IndOccurs, w0: Walk, rf: VBinder) RecFieldType {
+    var w = w0;
+    var cur = rf.ty();
+    var xs = std.ArrayList(VBinder).empty;
+    var domains = std.ArrayList(ExprPtr).empty;
+    while (true) {
+        const f = eval.forceAll(self, w.depth, cur);
+        if (f.* != .pi) {
+            cur = f;
+            break;
+        }
+        const dom = f.pi.domain;
+        domains.append(self.ctx.bump, eval.quote(self, w.depth, dom)) catch util.oom();
+        const pushed, const fresh = walkFresh(self, w, dom);
+        cur = eval.applyClosure(self, w.depth + 1, &f.pi.body, fresh, dom);
+        xs.append(self.ctx.bump, VBinder{ .name = f.pi.binder_name, .style = f.pi.binder_style, .v = fresh }) catch util.oom();
+        w = pushed;
     }
-    return out;
+    const app = validIndApp(self, st, occ, w.depth, cur).?;
+    var rx = rf.v;
+    for (xs.items) |xb| {
+        rx = eval.apply(self, w.depth, rx, xb.v);
+    }
+    return .{ .w = w, .xs = xs, .domains = domains, .app = app, .applied = rx };
 }
 
-fn mkRecRule1(
+fn mkMinor(self: *TypeChecker, st: *InductiveCheckState, occ: *IndOccurs, ctor: CtorHeader, ctor_idx: usize) tc.Reject!struct { VBinder, ExprPtr } {
+    const t = try openCtorFields(self, st, occ, st.g, ctor.ty);
+    var c_app = st.motives.items[t.app.pos].v;
+    for (t.app.indices) |ix| {
+        c_app = eval.apply(self, t.w.depth, c_app, ix);
+    }
+    var c0 = value.mkRigidHeadWithEmpty(
+        self.arena,
+        .{ .ctor = .{ .name = ctor.name, .levels = st.uparams } },
+        value.spineEmpty(),
+    );
+    for (st.params.items) |pb| {
+        c0 = eval.apply(self, t.w.depth, c0, pb.v);
+    }
+    for (t.fields.items) |fb| {
+        c0 = eval.apply(self, t.w.depth, c0, fb.v);
+    }
+    c_app = eval.apply(self, t.w.depth, c_app, c0);
+
+    var w = t.w;
+    var v_binders = std.ArrayList(VBinder).empty;
+    var v_domains = std.ArrayList(ExprPtr).empty;
+    const v_base_name = TcCtx.str1(self.ctx, "v");
+    for (t.rec_fields.items, 0..) |fidx, ri| {
+        const rt = openRecFieldType(self, st, occ, w, t.fields.items[fidx]);
+        var m = st.motives.items[rt.app.pos].v;
+        for (rt.app.indices) |ix| {
+            m = eval.apply(self, rt.w.depth, m, ix);
+        }
+        m = eval.apply(self, rt.w.depth, m, rt.applied);
+        const hyp_expr = piFold(self, rt.xs.items, rt.domains.items, eval.quote(self, rt.w.depth, m));
+        var v_name = name_mod.appendIndexAfter(self.ctx, v_base_name, @as(u64, @intCast(ctor_idx)));
+        v_name = name_mod.appendIndexAfter(self.ctx, v_name, @as(u64, @intCast(ri)));
+        const ty_v = eval.eval(self, w.depth, w.e, hyp_expr);
+        const fresh = eval.mkBvarHc(self, w.depth, ty_v);
+        w = walkPush(self, w, fresh, ty_v);
+        v_binders.append(self.ctx.bump, VBinder{ .name = v_name, .style = .default, .v = fresh }) catch util.oom();
+        v_domains.append(self.ctx.bump, hyp_expr) catch util.oom();
+    }
+    var e = eval.quote(self, w.depth, c_app);
+    e = piFold(self, v_binders.items, v_domains.items, e);
+    e = piFold(self, t.fields.items, t.domains.items, e);
+    const minor_name = switch (ctor.name.asRef().kind) {
+        .str => |s| TcCtx.str(self.ctx, TcCtx.anonymous(self.ctx), s.sfx),
+        else => blk: {
+            const base = TcCtx.str1(self.ctx, "m");
+            break :blk name_mod.appendIndexAfter(self.ctx, base, @as(u64, @intCast(ctor_idx)));
+        },
+    };
+    return .{ pushGlobal(self, st, minor_name, .default, e), e };
+}
+
+fn mkMinors(self: *TypeChecker, st: *InductiveCheckState, occ: *IndOccurs) tc.Reject!void {
+    for (st.all_inductives_incl_specialized.items) |ind| {
+        var grp = std.ArrayList(VBinder).empty;
+        var grp_exprs = std.ArrayList(ExprPtr).empty;
+        for (ind.ctors.items, 0..) |ctor, ctor_idx| {
+            const b, const e = try mkMinor(self, st, occ, ctor, ctor_idx);
+            grp.append(self.ctx.bump, b) catch util.oom();
+            grp_exprs.append(self.ctx.bump, e) catch util.oom();
+        }
+        st.minors.append(self.ctx.bump, grp) catch util.oom();
+        st.minor_ty_exprs.append(self.ctx.bump, grp_exprs) catch util.oom();
+    }
+}
+
+fn mkRecRule(
     self: *TypeChecker,
     st: *const InductiveCheckState,
+    occ: *IndOccurs,
+    flat_minors: []const VBinder,
+    flat_minor_exprs: []const ExprPtr,
+    this_minor: VBinder,
     ctor: CtorHeader,
-    flat_mapped_minors: []const ExprPtr,
-    this_minor: ExprPtr,
 ) tc.Reject!RecRule {
-    const sep = try sepNonrecRecCtorArgs(self, st, ctor.ty, st.local_params.items);
-    const all_ctor_args = sep[1];
-    const rec_ctor_args = sep[2];
-    const handled_rec_args = try handleRecCtorArgsRecRule(self, st, rec_ctor_args.items);
-    var comp_rhs = expr.foldlApps(self.ctx, this_minor, all_ctor_args.items);
-    comp_rhs = expr.foldlApps(self.ctx, comp_rhs, handled_rec_args.items);
-    comp_rhs = expr.abstrLambdaTelescope(self.ctx, all_ctor_args.items, comp_rhs);
-    comp_rhs = expr.abstrLambdaTelescope(self.ctx, flat_mapped_minors, comp_rhs);
-    comp_rhs = expr.abstrLambdaTelescope(self.ctx, st.motives.items, comp_rhs);
-    comp_rhs = expr.abstrLambdaTelescope(self.ctx, st.local_params.items, comp_rhs);
-    const num_fields = @as(usize, expr.piTelescopeSize(ctor.ty)) - st.local_params.items.len;
+    const rec_str = TcCtx.allocString(self.ctx, "rec");
+    const t = try openCtorFields(self, st, occ, st.g, ctor.ty);
+    var handled = std.ArrayList(ExprPtr).empty;
+    for (t.rec_fields.items) |fidx| {
+        const rt = openRecFieldType(self, st, occ, t.w, t.fields.items[fidx]);
+        const rec_name = TcCtx.str(self.ctx, st.ind_names.items[rt.app.pos], rec_str);
+        var rv = value.mkRigidHeadWithEmpty(
+            self.arena,
+            .{ .recursor = .{ .name = rec_name, .levels = st.rec_uparams.? } },
+            value.spineEmpty(),
+        );
+        for (st.params.items) |pb| {
+            rv = eval.apply(self, rt.w.depth, rv, pb.v);
+        }
+        for (st.motives.items) |mb| {
+            rv = eval.apply(self, rt.w.depth, rv, mb.v);
+        }
+        for (flat_minors) |nb| {
+            rv = eval.apply(self, rt.w.depth, rv, nb.v);
+        }
+        for (rt.app.indices) |ix| {
+            rv = eval.apply(self, rt.w.depth, rv, ix);
+        }
+        rv = eval.apply(self, rt.w.depth, rv, rt.applied);
+        handled.append(self.ctx.bump, lamFold(self, rt.xs.items, rt.domains.items, eval.quote(self, rt.w.depth, rv))) catch util.oom();
+    }
+    var e = eval.quote(self, t.w.depth, this_minor.v);
+    for (t.fields.items) |fb| {
+        e = TcCtx.mkApp(self.ctx, e, eval.quote(self, t.w.depth, fb.v));
+    }
+    for (handled.items) |h| {
+        e = TcCtx.mkApp(self.ctx, e, h);
+    }
+    e = lamFold(self, t.fields.items, t.domains.items, e);
+    e = lamFold(self, flat_minors, flat_minor_exprs, e);
+    e = lamFold(self, st.motives.items, st.motive_ty_exprs.items, e);
+    e = lamFold(self, st.params.items, st.param_ty_exprs.items, e);
+    const num_fields = @as(usize, expr.piTelescopeSize(ctor.ty)) - @as(usize, st.num_params);
     return RecRule{
         .ctor_name = ctor.name,
         .ctor_telescope_size_wo_params = u16TryFrom(num_fields),
-        .val = comp_rhs,
+        .val = e,
     };
 }
 
-fn mkRecRules(self: *TypeChecker, st: *const InductiveCheckState) tc.Reject!std.ArrayList(std.ArrayList(RecRule)) {
-    var rec_rules = std.ArrayList(std.ArrayList(RecRule)).empty;
-    const minors = flatMapMinors(self.ctx, st);
-    var overall_ctor_idx: usize = 0;
-    for (st.all_inductives_incl_specialized.items) |ind_ty| {
-        var grp = std.ArrayList(RecRule).empty;
-        for (ind_ty.ctors.items) |ctor| {
-            const this_minor = minors.items[overall_ctor_idx];
-            const rec_rule = try mkRecRule1(self, st, ctor, minors.items, this_minor);
-            overall_ctor_idx += 1;
-            grp.append(self.ctx.bump, rec_rule) catch util.oom();
-        }
-        rec_rules.append(self.ctx.bump, grp) catch util.oom();
+fn assertClosedDefEq(self: *TypeChecker, x: ExprPtr, y: ExprPtr) tc.Reject!void {
+    const vx = eval.eval(self, 0, value.envEmpty(), x);
+    const vy = eval.eval(self, 0, value.envEmpty(), y);
+    if (!conv.defEqAt(self, 0, vx, vy)) {
+        return tc.reject("def_eq failed", .{});
     }
-    return rec_rules;
 }
 
 fn assertNonnestedTysDefEq(self: *TypeChecker, base_ind: *const InductiveData, st: *const InductiveCheckState) tc.Reject!void {
@@ -1179,8 +1248,7 @@ fn assertNonnestedTysDefEq(self: *TypeChecker, base_ind: *const InductiveData, s
             const old = old_d.?.inductive;
             const new = new_d.?.inductive;
             std.debug.assert(old_d.? != new_d.?);
-            self.tc_cache.clear();
-            try tc.assertDefEq(self, old.info.ty, new.info.ty);
+            try assertClosedDefEq(self, old.info.ty, new.info.ty);
         } else {
             return tc.reject("malformed nested inductive", .{});
         }
@@ -1197,8 +1265,7 @@ fn assertNonnestedCtorsDefEq(self: *TypeChecker, st: *const InductiveCheckState)
                 const old = old_d.?.constructor;
                 const new = new_d.?.constructor;
                 std.debug.assert(old_d.? != new_d.?);
-                self.tc_cache.clear();
-                try tc.assertDefEq(self, old.info.ty, new.info.ty);
+                try assertClosedDefEq(self, old.info.ty, new.info.ty);
             } else {
                 return tc.reject("malformed nested constructor", .{});
             }
@@ -1216,11 +1283,13 @@ fn assertNonnestedRecRuleDefEq(
     util.assert(imported_rr != constructed_rr);
     util.assert(!std.meta.eql(imported_rr.*, constructed_rr.*));
     util.assert(!isNested(st));
-    self.tc_cache.clear();
     util.assert(imported_rr.ctor_name == constructed_rr.ctor_name);
     util.assert(imported_rr.ctor_telescope_size_wo_params == constructed_rr.ctor_telescope_size_wo_params);
-    const rr_made_val = expr.substExprLevels(self.ctx, constructed_rr.val, st.rec_uparams.?, old);
-    try tc.assertDefEq(self, imported_rr.val, rr_made_val);
+    const made = eval.evalInst(self, constructed_rr.val, st.rec_uparams.?, old);
+    const imported = eval.eval(self, 0, value.envEmpty(), imported_rr.val);
+    if (!conv.defEqAt(self, 0, imported, made)) {
+        return tc.reject("def_eq failed", .{});
+    }
 }
 
 fn assertNonnestedRecursorsDefEq(self: *TypeChecker, st: *const InductiveCheckState, recursors: *const std.ArrayList(Declar)) tc.Reject!void {
@@ -1232,11 +1301,13 @@ fn assertNonnestedRecursorsDefEq(self: *TypeChecker, st: *const InductiveCheckSt
             const new = new_rec;
             const old_rec_rules = old.recursor.rec_rules;
             const new_rec_rules = new.recursor.rec_rules;
-            self.tc_cache.clear();
             util.assert(old != new);
             util.assert(!std.meta.eql(old.*, new.*));
-            const imported_w_new_uparams = expr.substExprLevels(self.ctx, Declar.info(old).ty, Declar.info(old).uparams, st.rec_uparams.?);
-            try tc.assertDefEq(self, imported_w_new_uparams, Declar.info(new).ty);
+            const imported_w_new_uparams = eval.evalInst(self, Declar.info(old).ty, Declar.info(old).uparams, st.rec_uparams.?);
+            const made = eval.eval(self, 0, value.envEmpty(), Declar.info(new).ty);
+            if (!conv.defEqAt(self, 0, imported_w_new_uparams, made)) {
+                return tc.reject("def_eq failed", .{});
+            }
             util.assert(old_rec_rules.len == new_rec_rules.len);
             var i: usize = 0;
             while (i < old_rec_rules.len) : (i += 1) {
@@ -1248,70 +1319,59 @@ fn assertNonnestedRecursorsDefEq(self: *TypeChecker, st: *const InductiveCheckSt
     }
 }
 
-fn mkRecursorAux(
-    self: *TypeChecker,
-    st: *const InductiveCheckState,
-    ind_name: NamePtr,
-    motive: ExprPtr,
-    major: ExprPtr,
-    local_indices: []const ExprPtr,
-    flat_mapped_minors: []const ExprPtr,
-    rec_rules: []const RecRule,
-) Declar {
-    const motive_app_base = expr.foldlApps(self.ctx, motive, local_indices);
-    const motive_app = TcCtx.mkApp(self.ctx, motive_app_base, major);
-
-    var rec_ty = expr.abstrPi(self.ctx, major, motive_app);
-    rec_ty = expr.abstrPiTelescope(self.ctx, local_indices, rec_ty);
-    rec_ty = expr.abstrPiTelescope(self.ctx, flat_mapped_minors, rec_ty);
-    rec_ty = expr.abstrPiTelescope(self.ctx, st.motives.items, rec_ty);
-    rec_ty = expr.abstrPiTelescope(self.ctx, st.local_params.items, rec_ty);
-
-    var all_inductives = std.ArrayList(NamePtr).empty;
-    for (st.all_inductives_incl_specialized.items) |x| {
-        all_inductives.append(self.ctx.bump, x.name) catch util.oom();
+pub fn mkRecursors(self: *TypeChecker, st: *InductiveCheckState, occ: *IndOccurs) tc.Reject!std.ArrayList(Declar) {
+    var flat_minors = std.ArrayList(VBinder).empty;
+    var flat_minor_exprs = std.ArrayList(ExprPtr).empty;
+    for (st.minors.items, st.minor_ty_exprs.items) |grp, grp_exprs| {
+        flat_minors.appendSlice(self.ctx.bump, grp.items) catch util.oom();
+        flat_minor_exprs.appendSlice(self.ctx.bump, grp_exprs.items) catch util.oom();
     }
 
-    const recursor = RecursorData{
-        .info = DeclarInfo{
-            .name = blk: {
-                const rec_str_ptr = TcCtx.allocString(self.ctx, "rec");
-                break :blk TcCtx.str(self.ctx, ind_name, rec_str_ptr);
-            },
-            .uparams = st.rec_uparams.?,
-            .ty = rec_ty,
-        },
-        .all_inductives = all_inductives.items,
-        .num_params = u16TryFrom(st.local_params.items.len),
-        .num_indices = u16TryFrom(local_indices.len),
-        .num_motives = u16TryFrom(st.motives.items.len),
-        .num_minors = u16TryFrom(flat_mapped_minors.len),
-        .rec_rules = rec_rules,
-        .is_k = st.k_target.?,
-    };
+    var rec_rules = std.ArrayList(std.ArrayList(RecRule)).empty;
+    var flat_idx: usize = 0;
+    for (st.all_inductives_incl_specialized.items) |ind| {
+        var grp = std.ArrayList(RecRule).empty;
+        for (ind.ctors.items) |ctor| {
+            const rule = try mkRecRule(self, st, occ, flat_minors.items, flat_minor_exprs.items, flat_minors.items[flat_idx], ctor);
+            flat_idx += 1;
+            grp.append(self.ctx.bump, rule) catch util.oom();
+        }
+        rec_rules.append(self.ctx.bump, grp) catch util.oom();
+    }
 
-    return Declar{ .recursor = recursor };
-}
-
-pub fn mkRecursors(self: *TypeChecker, st: *const InductiveCheckState) tc.Reject!std.ArrayList(Declar) {
-    const rec_rules = try mkRecRules(self, st);
+    const rec_str = TcCtx.allocString(self.ctx, "rec");
+    const t_name = TcCtx.str1(self.ctx, "t");
     var recursors = std.ArrayList(Declar).empty;
     for (st.all_inductives_incl_specialized.items, 0..) |ind, i| {
-        const motive = st.motives.items[i];
-        const major = st.majors.items[i];
-        const local_indices = st.local_indices.items[i];
-        const minors = flatMapMinors(self.ctx, st);
-        const recursor = mkRecursorAux(
-            self,
-            st,
-            ind.name,
-            motive,
-            major,
-            local_indices.items,
-            minors.items,
-            rec_rules.items[i].items,
-        );
-        recursors.append(self.ctx.bump, recursor) catch util.oom();
+        const it = try openIndices(self, st, st.g, ind.ty);
+        const major_dom = indApp(self, st, it.w.depth, i, it.binders.items);
+        const w2, const major = walkFresh(self, it.w, major_dom);
+        var capp = st.motives.items[i].v;
+        for (it.binders.items) |ib| {
+            capp = eval.apply(self, w2.depth, capp, ib.v);
+        }
+        capp = eval.apply(self, w2.depth, capp, major);
+        var e = eval.quote(self, w2.depth, capp);
+        e = TcCtx.mkPi(self.ctx, t_name, .default, eval.quote(self, it.w.depth, major_dom), e);
+        e = piFold(self, it.binders.items, it.domains.items, e);
+        e = piFold(self, flat_minors.items, flat_minor_exprs.items, e);
+        e = piFold(self, st.motives.items, st.motive_ty_exprs.items, e);
+        e = piFold(self, st.params.items, st.param_ty_exprs.items, e);
+        const recursor = RecursorData{
+            .info = DeclarInfo{
+                .name = TcCtx.str(self.ctx, ind.name, rec_str),
+                .uparams = st.rec_uparams.?,
+                .ty = e,
+            },
+            .all_inductives = st.ind_names.items,
+            .num_params = st.num_params,
+            .num_indices = st.index_counts.items[i],
+            .num_motives = u16TryFrom(st.motives.items.len),
+            .num_minors = u16TryFrom(flat_minors.items.len),
+            .rec_rules = rec_rules.items[i].items,
+            .is_k = st.k_target.?,
+        };
+        recursors.append(self.ctx.bump, Declar{ .recursor = recursor }) catch util.oom();
     }
     return recursors;
 }

@@ -68,6 +68,7 @@ pub const TcCache = struct {
     canon_cache: swiss_map.FxHashMap(usize, V) = .empty,
     content_hc: swiss_map.FxHashMap(struct { u8, u64 }, V) = .empty,
     fvar_cache: swiss_map.FxHashMap(usize, bool) = .empty,
+    quote_cache: swiss_map.FxHashMap(struct { usize, u32 }, ExprPtr) = .empty,
 
     pub const empty: TcCache = .{};
 
@@ -182,7 +183,7 @@ fn checkDeclarWith(self: *const ExportFile, d: *const Declar, ar: *Arena, ctx: *
     }
 }
 
-fn failWithName(d: *const Declar) void {
+pub fn failWithName(d: *const Declar) void {
     var buf: [512]u8 = undefined;
     var w = std.Io.Writer.fixed(&buf);
     @import("debug_printer.zig").debugPrint(&w, d.info().name) catch {};
