@@ -2,6 +2,7 @@ const std = @import("std");
 const name_mod = @import("name.zig");
 const conv = @import("conv.zig");
 const eval = @import("eval.zig");
+const quote = @import("quote.zig");
 const inference = @import("infer.zig");
 const level = @import("level.zig");
 const env = @import("env.zig");
@@ -72,7 +73,7 @@ fn walkFresh(self: *TypeChecker, w: Walk, dom: V) struct { Walk, V } {
 }
 
 fn sortOfValue(self: *TypeChecker, w: Walk, ty_v: V) tc.Reject!LevelPtr {
-    const q = eval.quote(self, w.depth, ty_v);
+    const q = quote.quote(self, w.depth, ty_v);
     const t = try inference.infer(self, w.depth, w.e, w.c, q, .Check);
     return inference.ensureSort(self, w.depth, t);
 }
@@ -420,7 +421,7 @@ const SpecCtx = struct {
     aux_ext: *DeclarMap,
     params: []const VBinder,
     param_ty_exprs: []const ExprPtr,
-    memo: eval.QuoteMemo = .empty,
+    memo: quote.QuoteMemo = .empty,
 
     fn deinit(self: *SpecCtx) void {
         self.memo.deinit(util.smp_allocator);
@@ -451,7 +452,7 @@ fn specializeNested(
         const f = eval.forceAll(self, w.depth, cur0);
         if (f.* != .pi) return tc.reject("exhausted telescope early", .{});
         const dom = f.pi.domain;
-        param_ty_exprs.append(self.ctx.bump, eval.quote(self, w.depth, dom)) catch util.oom();
+        param_ty_exprs.append(self.ctx.bump, quote.quote(self, w.depth, dom)) catch util.oom();
         const pushed, const fresh = walkFresh(self, w, dom);
         cur0 = eval.applyClosure(self, w.depth + 1, &f.pi.body, fresh, dom);
         params.append(self.ctx.bump, VBinder{ .name = f.pi.binder_name, .style = f.pi.binder_style, .v = fresh }) catch util.oom();
@@ -477,7 +478,7 @@ fn specializeNested(
                 if (f.* != .pi) return tc.reject("exhausted telescope early", .{});
                 cur = eval.applyClosure(self, w.depth, &f.pi.body, pb.v, f.pi.domain);
             }
-            const replaced = try eval.quoteWith(self, &sp, w.depth, cur);
+            const replaced = try quote.quoteWith(self, &sp, w.depth, cur);
             const new_ty = piFold(self, params.items, param_ty_exprs.items, replaced);
             new_ctors.append(self.ctx.bump, CtorHeader{ .name = ctor.name, .ty = new_ty }) catch util.oom();
         }
@@ -565,7 +566,7 @@ fn specTryNested(self: *TypeChecker, sp: *SpecCtx, depth: u32, v: V) tc.Reject!?
 
 fn occursInnerBvar(self: *TypeChecker, sp: *SpecCtx, depth: u32, arg: V) bool {
     const p: u32 = sp.st.num_params;
-    const q = eval.quote(self, depth, arg);
+    const q = quote.quote(self, depth, arg);
     const nlb: u32 = q.numLooseBvars();
     if (nlb == 0 or depth == p) return false;
     const inner: u32 = depth - p;
@@ -582,7 +583,7 @@ fn occursInnerBvar(self: *TypeChecker, sp: *SpecCtx, depth: u32, arg: V) bool {
 }
 
 fn specKey(self: *TypeChecker, sp: *SpecCtx, ind_name: NamePtr, levels: LevelsPtr, args: []const V) ExprPtr {
-    return eval.quote(self, sp.st.num_params, indAppValue(self, sp.st.num_params, ind_name, levels, args));
+    return quote.quote(self, sp.st.num_params, indAppValue(self, sp.st.num_params, ind_name, levels, args));
 }
 
 fn specEmit(self: *TypeChecker, sp: *SpecCtx, depth: u32, aux_name: NamePtr, rest: []const V) ExprPtr {
@@ -591,7 +592,7 @@ fn specEmit(self: *TypeChecker, sp: *SpecCtx, depth: u32, aux_name: NamePtr, res
         e = TcCtx.mkApp(self.ctx, e, TcCtx.mkVar(self.ctx, @intCast(depth - 1 - pb.v.rigid.head.b_var.lvl)));
     }
     for (rest) |a| {
-        e = TcCtx.mkApp(self.ctx, e, eval.quote(self, depth, a));
+        e = TcCtx.mkApp(self.ctx, e, quote.quote(self, depth, a));
     }
     return e;
 }
@@ -611,7 +612,7 @@ fn specInstantiate(
         if (f.* != .pi) return tc.reject("exhausted telescope early", .{});
         cur = eval.applyClosure(self, p, &f.pi.body, a, f.pi.domain);
     }
-    return piFold(self, sp.params, sp.param_ty_exprs, eval.quote(self, p, cur));
+    return piFold(self, sp.params, sp.param_ty_exprs, quote.quote(self, p, cur));
 }
 
 fn applyParams(self: *TypeChecker, st: *const InductiveCheckState, depth: u32, ty_v: V) tc.Reject!V {
@@ -642,7 +643,7 @@ fn openIndicesFrom(self: *TypeChecker, w0: Walk, cur0: V) IndexTelescope {
             return .{ .w = w, .binders = binders, .domains = domains, .codomain = f };
         }
         const dom = f.pi.domain;
-        domains.append(self.ctx.bump, eval.quote(self, w.depth, dom)) catch util.oom();
+        domains.append(self.ctx.bump, quote.quote(self, w.depth, dom)) catch util.oom();
         const pushed, const fresh = walkFresh(self, w, dom);
         cur = eval.applyClosure(self, w.depth + 1, &f.pi.body, fresh, dom);
         binders.append(self.ctx.bump, VBinder{ .name = f.pi.binder_name, .style = f.pi.binder_style, .v = fresh }) catch util.oom();
@@ -664,7 +665,7 @@ fn checkInductiveSpecs(self: *TypeChecker, st: *InductiveCheckState) tc.Reject!v
                 const f = eval.forceAll(self, st.g.depth, cur);
                 if (f.* != .pi) return tc.reject("exhausted telescope early", .{});
                 const dom = f.pi.domain;
-                st.param_ty_exprs.append(self.ctx.bump, eval.quote(self, st.g.depth, dom)) catch util.oom();
+                st.param_ty_exprs.append(self.ctx.bump, quote.quote(self, st.g.depth, dom)) catch util.oom();
                 const pushed, const fresh = walkFresh(self, st.g, dom);
                 cur = eval.applyClosure(self, st.g.depth + 1, &f.pi.body, fresh, dom);
                 st.params.append(self.ctx.bump, VBinder{ .name = f.pi.binder_name, .style = f.pi.binder_style, .v = fresh }) catch util.oom();
@@ -967,7 +968,7 @@ fn mkMotives(self: *TypeChecker, st: *InductiveCheckState) tc.Reject!void {
         const it = try openIndices(self, st, st.g, ind.ty);
         const major_dom = indApp(self, st, it.w.depth, i, it.binders.items);
         var e = TcCtx.mkSort(self.ctx, st.elim_level.?);
-        e = TcCtx.mkPi(self.ctx, t_name, .default, eval.quote(self, it.w.depth, major_dom), e);
+        e = TcCtx.mkPi(self.ctx, t_name, .default, quote.quote(self, it.w.depth, major_dom), e);
         e = piFold(self, it.binders.items, it.domains.items, e);
         const motive_name = if (multiple)
             name_mod.appendIndexAfter(self.ctx, motive_base_name, @as(u64, @intCast(i)) + 1)
@@ -1015,7 +1016,7 @@ fn openCtorFields(self: *TypeChecker, st: *const InductiveCheckState, occ: *IndO
             break;
         }
         const dom = f.pi.domain;
-        domains.append(self.ctx.bump, eval.quote(self, w.depth, dom)) catch util.oom();
+        domains.append(self.ctx.bump, quote.quote(self, w.depth, dom)) catch util.oom();
         if (isRecField(self, st, occ, w, dom)) {
             rec_fields.append(self.ctx.bump, fields.items.len) catch util.oom();
         }
@@ -1048,7 +1049,7 @@ fn openRecFieldType(self: *TypeChecker, st: *const InductiveCheckState, occ: *In
             break;
         }
         const dom = f.pi.domain;
-        domains.append(self.ctx.bump, eval.quote(self, w.depth, dom)) catch util.oom();
+        domains.append(self.ctx.bump, quote.quote(self, w.depth, dom)) catch util.oom();
         const pushed, const fresh = walkFresh(self, w, dom);
         cur = eval.applyClosure(self, w.depth + 1, &f.pi.body, fresh, dom);
         xs.append(self.ctx.bump, VBinder{ .name = f.pi.binder_name, .style = f.pi.binder_style, .v = fresh }) catch util.oom();
@@ -1092,7 +1093,7 @@ fn mkMinor(self: *TypeChecker, st: *InductiveCheckState, occ: *IndOccurs, ctor: 
             m = eval.apply(self, rt.w.depth, m, ix);
         }
         m = eval.apply(self, rt.w.depth, m, rt.applied);
-        const hyp_expr = piFold(self, rt.xs.items, rt.domains.items, eval.quote(self, rt.w.depth, m));
+        const hyp_expr = piFold(self, rt.xs.items, rt.domains.items, quote.quote(self, rt.w.depth, m));
         var v_name = name_mod.appendIndexAfter(self.ctx, v_base_name, @as(u64, @intCast(ctor_idx)));
         v_name = name_mod.appendIndexAfter(self.ctx, v_name, @as(u64, @intCast(ri)));
         const ty_v = eval.eval(self, w.depth, w.e, hyp_expr);
@@ -1101,7 +1102,7 @@ fn mkMinor(self: *TypeChecker, st: *InductiveCheckState, occ: *IndOccurs, ctor: 
         v_binders.append(self.ctx.bump, VBinder{ .name = v_name, .style = .default, .v = fresh }) catch util.oom();
         v_domains.append(self.ctx.bump, hyp_expr) catch util.oom();
     }
-    var e = eval.quote(self, w.depth, c_app);
+    var e = quote.quote(self, w.depth, c_app);
     e = piFold(self, v_binders.items, v_domains.items, e);
     e = piFold(self, t.fields.items, t.domains.items, e);
     const minor_name = switch (ctor.name.asRef().kind) {
@@ -1161,11 +1162,11 @@ fn mkRecRule(
             rv = eval.apply(self, rt.w.depth, rv, ix);
         }
         rv = eval.apply(self, rt.w.depth, rv, rt.applied);
-        handled.append(self.ctx.bump, lamFold(self, rt.xs.items, rt.domains.items, eval.quote(self, rt.w.depth, rv))) catch util.oom();
+        handled.append(self.ctx.bump, lamFold(self, rt.xs.items, rt.domains.items, quote.quote(self, rt.w.depth, rv))) catch util.oom();
     }
-    var e = eval.quote(self, t.w.depth, this_minor.v);
+    var e = quote.quote(self, t.w.depth, this_minor.v);
     for (t.fields.items) |fb| {
-        e = TcCtx.mkApp(self.ctx, e, eval.quote(self, t.w.depth, fb.v));
+        e = TcCtx.mkApp(self.ctx, e, quote.quote(self, t.w.depth, fb.v));
     }
     for (handled.items) |h| {
         e = TcCtx.mkApp(self.ctx, e, h);
@@ -1302,8 +1303,8 @@ pub fn mkRecursors(self: *TypeChecker, st: *InductiveCheckState, occ: *IndOccurs
             capp = eval.apply(self, w2.depth, capp, ib.v);
         }
         capp = eval.apply(self, w2.depth, capp, major);
-        var e = eval.quote(self, w2.depth, capp);
-        e = TcCtx.mkPi(self.ctx, t_name, .default, eval.quote(self, it.w.depth, major_dom), e);
+        var e = quote.quote(self, w2.depth, capp);
+        e = TcCtx.mkPi(self.ctx, t_name, .default, quote.quote(self, it.w.depth, major_dom), e);
         e = piFold(self, it.binders.items, it.domains.items, e);
         e = piFold(self, flat_minors.items, flat_minor_exprs.items, e);
         e = piFold(self, st.motives.items, st.motive_ty_exprs.items, e);
@@ -1370,7 +1371,7 @@ fn restoreCtorName(self: *TypeChecker, st: *const InductiveCheckState, ctor_name
 const RestoreCtx = struct {
     st: *const InductiveCheckState,
     rec_map: *const FxIndexMap(NamePtr, NamePtr),
-    memo: eval.QuoteMemo = .empty,
+    memo: quote.QuoteMemo = .empty,
 
     fn deinit(self: *RestoreCtx) void {
         self.memo.deinit(util.smp_allocator);
@@ -1382,15 +1383,15 @@ const RestoreCtx = struct {
         switch (v.rigid.head) {
             .recursor => |nl| {
                 const renamed = hctx.rec_map.get(nl.name) orelse return null;
-                return try eval.quoteSpineWith(self, hctx, depth, TcCtx.mkConst(self.ctx, renamed, nl.levels), v.rigid.spine);
+                return try quote.quoteSpineWith(self, hctx, depth, TcCtx.mkConst(self.ctx, renamed, nl.levels), v.rigid.spine);
             },
             .inductive => |nl| {
                 const container = st.aux_to_container.get(nl.name) orelse return null;
                 const args = eval.spineApps(self, depth, v.rigid.spine) orelse return null;
                 util.assert(args.len >= st.num_params);
-                var e = eval.quote(self, depth, container);
+                var e = quote.quote(self, depth, container);
                 for (args[st.num_params..]) |a| {
-                    e = TcCtx.mkApp(self.ctx, e, try eval.quoteWith(self, hctx, depth, a));
+                    e = TcCtx.mkApp(self.ctx, e, try quote.quoteWith(self, hctx, depth, a));
                 }
                 return e;
             },
@@ -1404,10 +1405,10 @@ const RestoreCtx = struct {
                 var e = TcCtx.mkConst(self.ctx, renamed, cont_head.levels);
                 const cont_args = eval.spineApps(self, depth, container.rigid.spine).?;
                 for (cont_args) |ca| {
-                    e = TcCtx.mkApp(self.ctx, e, eval.quote(self, depth, ca));
+                    e = TcCtx.mkApp(self.ctx, e, quote.quote(self, depth, ca));
                 }
                 for (args[st.num_params..]) |a| {
-                    e = TcCtx.mkApp(self.ctx, e, try eval.quoteWith(self, hctx, depth, a));
+                    e = TcCtx.mkApp(self.ctx, e, try quote.quoteWith(self, hctx, depth, a));
                 }
                 return e;
             },
@@ -1435,7 +1436,7 @@ fn restoreE(
             .lam => |b| .{ b.binder_name, b.binder_style, eval.lamDomain(self, w.depth, f), &f.lam.body },
             else => return tc.reject("malformed recursor", .{}),
         };
-        domains.append(self.ctx.bump, eval.quote(self, w.depth, dom)) catch util.oom();
+        domains.append(self.ctx.bump, quote.quote(self, w.depth, dom)) catch util.oom();
         const pushed, const fresh = walkFresh(self, w, dom);
         cur = eval.applyClosure(self, w.depth + 1, clo, fresh, dom);
         binders.append(self.ctx.bump, VBinder{ .name = binder_name, .style = binder_style, .v = fresh }) catch util.oom();
@@ -1443,7 +1444,7 @@ fn restoreE(
     }
     var h = RestoreCtx{ .st = st, .rec_map = nested_rec_name_to_rec_name };
     defer h.deinit();
-    const body = try eval.quoteWith(self, &h, w.depth, cur);
+    const body = try quote.quoteWith(self, &h, w.depth, cur);
     return if (is_pi)
         piFold(self, binders.items, domains.items, body)
     else
