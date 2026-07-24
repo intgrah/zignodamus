@@ -779,7 +779,7 @@ fn spineTypeWithValue(self: *TypeChecker, depth: u32, ty0: V, prev_head: V, spin
     return ty;
 }
 
-pub fn whnfHead(self: *TypeChecker, depth: u32, v: V) V {
+pub fn forceHead(self: *TypeChecker, depth: u32, v: V) V {
     var cur = v;
     while (true) {
         cur = forceThunk(self, depth, cur);
@@ -807,7 +807,7 @@ pub fn whnfHead(self: *TypeChecker, depth: u32, v: V) V {
 }
 
 pub fn doProj(self: *TypeChecker, depth: u32, ty_name: NamePtr, idx: usize, v0: V) V {
-    const v = whnfHead(self, depth, v0);
+    const v = forceHead(self, depth, v0);
     switch (v.*) {
         .rigid => |r| switch (r.head) {
             .ctor => |ct| {
@@ -1228,7 +1228,7 @@ fn doRecursorIota(self: *TypeChecker, depth: u32, name: NamePtr, levels: LevelsP
     if (kPreReduce(self, depth, rec, levels, args)) |r| {
         return r;
     }
-    const major = whnfHead(self, depth, args[rec.majorIdx()]);
+    const major = forceHead(self, depth, args[rec.majorIdx()]);
     return fireRecursor(self, depth, rec, levels, args, major);
 }
 
@@ -1467,7 +1467,7 @@ pub fn strLitToCtorVal(self: *TypeChecker, depth: u32, s: StringPtr) ?V {
     const ctor_expr = expr.strLitToConstructor(self.ctx, s) orelse return null;
     const empty = value.envEmpty();
     const v = eval(self, depth, empty, ctor_expr);
-    return whnfHead(self, depth, v);
+    return forceHead(self, depth, v);
 }
 
 fn natLitToCtorVal(self: *TypeChecker, depth: u32, n: BigUintPtr) ?V {
