@@ -48,11 +48,6 @@ fn rigidHeadKey(head: *const RigidHead) RigidKey {
     }
 }
 
-fn elimKey(elim: *const Elim) RigidKey {
-    if (elim.isApp()) return .{ 0, @intFromPtr(elim.appV()), 0 };
-    return .{ 1, elim.projTyName().getHash(), @as(u64, elim.projIdx()) };
-}
-
 const ForceStep = union(enum) {
     reduced: V,
     descend: struct { major: V, args: []const V },
@@ -202,8 +197,7 @@ pub fn mkThunkHc(self: *TypeChecker, e: E, ex: ExprPtr) V {
 }
 
 inline fn spineSnocHc(self: *TypeChecker, prev: S, elim: Elim) S {
-    const ek = elimKey(&elim);
-    const key = .{ @intFromPtr(prev), ek[0], ek[1], ek[2] };
+    const key = .{ @intFromPtr(prev), elim.raw() };
     const gop = self.tc_cache.spine_hc.getOrPut(util.smp_allocator, key) catch util.oom();
     if (gop.found_existing) return gop.value_ptr.*;
     const s = value.spineSnoc(self.arena, prev, elim);

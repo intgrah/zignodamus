@@ -10,7 +10,7 @@ const is_64 = switch (@bitSizeOf(usize)) {
     else => @compileError("pointer tagging requires a 32-bit or 64-bit target"),
 };
 
-pub const ptr_tag: usize = if (is_64) 1 << 56 else 1 << 1;
+pub const ptr_tag: usize = 1 << 1;
 
 pub fn Ptr(comptime T: type) type {
     return enum(usize) {
@@ -19,7 +19,7 @@ pub fn Ptr(comptime T: type) type {
         const Self = @This();
 
         comptime {
-            if (!is_64) std.debug.assert(@alignOf(T) >= 4);
+            std.debug.assert(@alignOf(T) >= 4);
         }
 
         pub const nil: Self = @enumFromInt(0);

@@ -238,6 +238,7 @@ pub fn doLet(self: *Parser, idx: BackRef, name_idx: u32, type_idx: u32, value_id
 }
 
 pub fn doProj(self: *Parser, idx: BackRef, ty_name_idx: u32, proj_idx: usize, struct_idx: u32) ParseError!void {
+    if (proj_idx > std.math.maxInt(u16)) return fail("proj index too large");
     const ty_name = try getNamePtr(self, ty_name_idx);
     const structure = try getExprPtr(self, struct_idx);
     pushExpr(self, idx, .mk(.{ .proj = .{

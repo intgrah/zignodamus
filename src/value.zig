@@ -42,38 +42,49 @@ pub const UnfoldHead = struct {
     levels: LevelsPtr,
 };
 
-/// Spine eliminator  App(arg: V) | Proj(ty_name, idx).
+/// Spine eliminator  App(arg: V) | Proj(ty_name, idx), packed in one word.
 /// - App:
-///   a = @intFromPtr(arg)
-///   b unused
+///   [64-1] @intFromPtr(arg) 2-byte aligned
+///   [1-0] tag = 0
 /// - Proj:
-///   a = ty_name | 1. ty_name is aligned so we can do this
-///   b = idx
+///   [64-48] idx
+///   [48-1] ty_name 2-byte aligned
+///   [1-0] tag = 1
 pub const Elim = struct {
-    a: usize,
-    b: usize,
+    bits: u64,
+
+    const idx_shift: u6 = 48;
+    const name_mask: u64 = (1 << idx_shift) - 1;
 
     comptime {
         std.debug.assert(@alignOf(Value) > 1);
     }
 
     pub fn mkApp(v: V) Elim {
-        return .{ .a = @intFromPtr(v), .b = 0 };
+        const addr: u64 = @intFromPtr(v);
+        std.debug.assert(addr & ~name_mask == 0);
+        return .{ .bits = addr };
     }
     pub fn mkProj(ty_name: NamePtr, idx: usize) Elim {
-        return .{ .a = ty_name.lowTagged(), .b = idx };
+        const low: u64 = ty_name.lowTagged();
+        std.debug.assert(low & ~name_mask == 0);
+        std.debug.assert(idx <= std.math.maxInt(u16));
+        return .{ .bits = low | (@as(u64, idx) << idx_shift) };
     }
     pub fn isApp(self: Elim) bool {
-        return self.a & 1 == 0;
+        return self.bits & 1 == 0;
     }
     pub fn appV(self: Elim) V {
-        return @ptrFromInt(self.a);
+        return @ptrFromInt(@as(usize, @intCast(self.bits)));
     }
     pub fn projTyName(self: Elim) NamePtr {
-        return NamePtr.fromLowTagged(self.a);
+        return NamePtr.fromLowTagged(@intCast(self.bits & name_mask));
     }
     pub fn projIdx(self: Elim) usize {
-        return self.b;
+        return @intCast(self.bits >> idx_shift);
+    }
+    pub fn raw(self: Elim) u64 {
+        return self.bits;
     }
 };
 
@@ -340,15 +351,15 @@ pub fn mkSort(arena: *Arena, level: LevelPtr) V {
     return v;
 }
 
-pub fn mkNatlit(arena: *Arena, ptr: BigUintPtr) V {
+pub fn mkNatlit(arena: *Arena, num: BigUintPtr) V {
     const v = arena.create(Value);
-    v.* = .{ .nat_lit = .{ .ptr = ptr } };
+    v.* = .{ .nat_lit = .{ .ptr = num } };
     return v;
 }
 
-pub fn mkStrlit(arena: *Arena, ptr: StringPtr) V {
+pub fn mkStrlit(arena: *Arena, s: StringPtr) V {
     const v = arena.create(Value);
-    v.* = .{ .str_lit = .{ .ptr = ptr } };
+    v.* = .{ .str_lit = .{ .ptr = s } };
     return v;
 }
 
