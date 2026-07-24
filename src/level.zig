@@ -79,7 +79,7 @@ pub fn simplify(self: *TcCtx, lvl: LevelPtr) LevelPtr {
         .zero, .param => return lvl,
         else => {},
     }
-    if (self.expr_cache.simplify_cache.get(lvl)) |cached| {
+    if (self.level_cache.simplify_cache.get(lvl)) |cached| {
         return cached;
     }
     const result = switch (lvl.asRef().kind) {
@@ -107,7 +107,7 @@ pub fn simplify(self: *TcCtx, lvl: LevelPtr) LevelPtr {
             }
         },
     };
-    self.expr_cache.simplify_cache.put(util.smp_allocator, lvl, result) catch util.oom();
+    self.level_cache.simplify_cache.put(util.smp_allocator, lvl, result) catch util.oom();
     return result;
 }
 

@@ -23,20 +23,15 @@ export_file: *const ExportFile,
 arena: *Arena,
 bump: std.mem.Allocator,
 dag: Dag,
-expr_cache: ExprCache,
+level_cache: LevelCache,
 
-pub const ExprCache = struct {
-    inst_cache: FxHashMap(struct { ExprPtr, u16 }, ExprPtr) = .empty,
-    subst_cache: FxHashMap(struct { ExprPtr, LevelsPtr, LevelsPtr }, ExprPtr) = .empty,
-    dsubst_cache: FxHashMap(struct { ExprPtr, LevelsPtr, LevelsPtr }, ExprPtr) = .empty,
-    abstr_cache: FxHashMap(struct { ExprPtr, u16 }, ExprPtr) = .empty,
-    abstr_cache_levels: FxHashMap(struct { ExprPtr, u16, u16 }, ExprPtr) = .empty,
+pub const LevelCache = struct {
     simplify_cache: FxHashMap(LevelPtr, LevelPtr) = .empty,
 
-    pub const empty: ExprCache = .{};
+    pub const empty: LevelCache = .{};
 
-    pub fn deinit(self: *ExprCache) void {
-        inline for (@typeInfo(ExprCache).@"struct".fields) |f| {
+    pub fn deinit(self: *LevelCache) void {
+        inline for (@typeInfo(LevelCache).@"struct".fields) |f| {
             @field(self, f.name).deinit(smp_allocator);
         }
     }
@@ -49,13 +44,13 @@ pub fn init(export_file: *const ExportFile, ar: *Arena) TcCtx {
         .arena = ar,
         .bump = ar.bumpAllocator(),
         .dag = dag,
-        .expr_cache = .empty,
+        .level_cache = .empty,
     };
 }
 
 pub fn deinit(self: *TcCtx) void {
     self.dag.deinit();
-    self.expr_cache.deinit();
+    self.level_cache.deinit();
 }
 
 fn isExprLocalOnly(e: *const expr.Expr) bool {
