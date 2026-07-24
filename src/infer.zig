@@ -72,6 +72,9 @@ fn argValue(self: *TypeChecker, depth: u32, e: E, a: ExprPtr) V {
     };
 }
 
+/// Inference cache entry: (result: V, checked: bool).
+/// - [64-1] @intFromPtr(result) 2-byte aligned
+/// - [1-0] checked
 pub const CachedType = struct {
     bits: usize,
 

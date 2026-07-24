@@ -42,14 +42,14 @@ pub const UnfoldHead = struct {
     levels: LevelsPtr,
 };
 
-/// Spine eliminator  App(arg: V) | Proj(ty_name, idx), packed in one word.
-/// - App:
-///   [64-1] @intFromPtr(arg) 2-byte aligned
-///   [1-0] tag = 0
-/// - Proj:
-///   [64-48] idx
-///   [48-1] ty_name 2-byte aligned
-///   [1-0] tag = 1
+/// Spine eliminator: App(arg: V) | Proj(ty_name, idx),
+/// ## App
+/// - [64-1] @intFromPtr(arg) 2-byte aligned
+/// - [1-0] tag = 0
+/// ## Proj
+/// - [64-48] idx
+/// - [48-1] ty_name 2-byte aligned
+/// - [1-0] tag = 1
 pub const Elim = struct {
     bits: u64,
 
@@ -133,6 +133,8 @@ pub const LevelSub = struct {
     vs: LevelsPtr,
 };
 
+/// Hash-consed pruned env prefix. mask bit i set means bvar i is captured; slots holds the
+/// captured values in index order, ranked by popcount. Never captures indices ≥ 64.
 pub const Frame = struct {
     hash: u64,
     mask: u64,
@@ -151,6 +153,7 @@ pub const Env = struct {
     lsub: ?*const LevelSub,
     hash: u64,
     len: u32,
+    /// Single-entry pruneEnv memo: prune_r is the pruned env for mask prune_mask
     prune_mask: u64,
     prune_r: E,
 

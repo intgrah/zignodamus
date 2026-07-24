@@ -12,6 +12,15 @@ const is_64 = switch (@bitSizeOf(usize)) {
 
 pub const ptr_tag: usize = 1 << 1;
 
+/// Interned pointer: Shared(addr) | Local(addr).
+/// ## Shared
+/// - [64-2] addr 4-byte aligned
+/// - [2-1] tag = 0
+/// - [1-0] 0, free for lowTagged
+/// ## Local
+/// - [64-2] addr 4-byte aligned
+/// - [2-1] tag = 1
+/// - [1-0] 0, free for lowTagged
 pub fn Ptr(comptime T: type) type {
     return enum(usize) {
         _,
@@ -61,17 +70,15 @@ pub const LevelPtr = Ptr(level.Level);
 pub const BigUintPtr = Ptr(BigUint);
 
 /// ## 64-bit
-/// - 16 bit num_loose_bvars
-/// - 45 bit address
-/// - 2 bits unused
-/// - 1 bit is_local
-/// Assumption: 8-byte alignment means lower 3 bits are free
-///
+/// - [64-48] num_loose_bvars
+/// - [48-3] addr 8-byte aligned
+/// - [3-1] 0
+/// - [1-0] is_local
 /// ## 32-bit
-/// - 16 bit num_loose_bvars
-/// - 15 bits unused
-/// - 1 bit is_local
-/// - 32 bit address
+/// - [64-48] num_loose_bvars
+/// - [48-33] 0
+/// - [33-32] is_local
+/// - [32-0] addr
 pub const ExprPtr = enum(u64) {
     _,
 

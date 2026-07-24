@@ -37,6 +37,7 @@ pub const LetData = struct {
 
 pub const Expr = struct {
     hash: u64,
+    /// Loose bvar set: bit i set means bvar i occurs free. Exact when numLooseBvars ≤ 64, else all ones
     fv_mask: u64,
     kind: Kind,
 
