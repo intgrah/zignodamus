@@ -2,14 +2,15 @@ const std = @import("std");
 const util = @import("util.zig");
 const expr_mod = @import("expr.zig");
 const Arena = @import("Arena.zig");
+const ptr = @import("ptr.zig");
 
 const BinderStyle = expr_mod.BinderStyle;
-const ExprPtr = @import("ptr.zig").ExprPtr;
-const LevelPtr = @import("ptr.zig").LevelPtr;
-const LevelsPtr = @import("ptr.zig").LevelsPtr;
-const NamePtr = @import("ptr.zig").NamePtr;
-const StringPtr = @import("ptr.zig").StringPtr;
-const BigUintPtr = @import("ptr.zig").BigUintPtr;
+const ExprPtr = ptr.ExprPtr;
+const LevelPtr = ptr.LevelPtr;
+const LevelsPtr = ptr.LevelsPtr;
+const NamePtr = ptr.NamePtr;
+const StringPtr = ptr.StringPtr;
+const BigUintPtr = ptr.BigUintPtr;
 
 pub const V = *Value;
 pub const E = *const Env;
@@ -41,6 +42,13 @@ pub const UnfoldHead = struct {
     levels: LevelsPtr,
 };
 
+/// Spine eliminator  App(arg: V) | Proj(ty_name, idx).
+/// - App:
+///   a = @intFromPtr(arg)
+///   b unused
+/// - Proj:
+///   a = ty_name | 1. ty_name is aligned so we can do this
+///   b = idx
 pub const Elim = struct {
     a: usize,
     b: usize,
