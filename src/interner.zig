@@ -1,6 +1,7 @@
 const std = @import("std");
 const Arena = @import("Arena.zig");
 const expr = @import("expr.zig");
+const value = @import("value.zig");
 const level = @import("level.zig");
 const name = @import("name.zig");
 const ptr = @import("ptr.zig");
@@ -231,6 +232,9 @@ inline fn getHashOf(comptime T: type, v: *const T) u64 {
 inline fn refEql(comptime T: type, a: *const T, b: *const T) bool {
     if (T == []const u8) return std.mem.eql(u8, a.*, b.*);
     if (T == BigUint) return a.eql(b.*);
+    if (T == value.Frame) {
+        return a.mask == b.mask and a.lsub == b.lsub and std.mem.eql(value.V, a.slots, b.slots);
+    }
     if (T == expr.Expr) {
         if (a.kind == .let) {
             if (b.kind != .let) return false;
@@ -242,6 +246,7 @@ inline fn refEql(comptime T: type, a: *const T, b: *const T) bool {
 }
 
 pub const NameInterner = Interner(name.Name);
+pub const FrameInterner = Interner(value.Frame);
 pub const LevelInterner = Interner(level.Level);
 pub const ExprInterner = Interner(expr.Expr);
 pub const StringInterner = Interner([]const u8);

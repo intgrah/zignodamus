@@ -1,4 +1,6 @@
 const std = @import("std");
+const interner = @import("interner.zig");
+const inference = @import("infer.zig");
 const level = @import("level.zig");
 const expr = @import("expr.zig");
 const Arena = @import("Arena.zig");
@@ -32,29 +34,32 @@ const E = value.E;
 const V = value.V;
 const S = value.S;
 
-const TcCache = struct {
+pub const TcCache = struct {
     infer_cache_check: swiss_map.UniqueHashMap(ExprPtr, ExprPtr) = .empty,
     infer_cache_no_check: swiss_map.UniqueHashMap(ExprPtr, ExprPtr) = .empty,
     whnf_cache: swiss_map.UniqueHashMap(ExprPtr, ExprPtr) = .empty,
     whnf_no_unfolding_cache: swiss_map.UniqueHashMap(ExprPtr, ExprPtr) = .empty,
     eq_cache: union_find.UnionFind(ExprPtr) = .empty,
+    value_eq: union_find.UnionFind(usize) = .empty,
     unfold_const_cache: swiss_map.FxHashMap(struct { NamePtr, LevelsPtr }, V) = .empty,
     rec_rule_cache: swiss_map.FxHashMap(struct { ExprPtr, LevelsPtr }, V) = .empty,
     const_head_type_cache: swiss_map.FxHashMap(struct { NamePtr, LevelsPtr }, V) = .empty,
     const_head_value_cache: swiss_map.FxHashMap(struct { NamePtr, LevelsPtr }, V) = .empty,
     const_result_level_cache: swiss_map.FxHashMap(struct { NamePtr, LevelsPtr }, LevelPtr) = .empty,
-    conv_cache: swiss_map.FxHashSet(struct { usize, usize }) = .empty,
     conv_cache_neg: swiss_map.FxHashSet(struct { usize, usize }) = .empty,
     conv_cache_neg_probe: swiss_map.FxHashSet(struct { usize, usize }) = .empty,
     probe_depth: u32 = 0,
     closed_eval_cache: swiss_map.FxHashMap(ExprPtr, V) = .empty,
     open_eval_cache: swiss_map.FxHashMap(struct { usize, ExprPtr }, V) = .empty,
-    open_eval_seen: swiss_map.FxHashSet(ExprPtr) = .empty,
     bvar_hc: swiss_map.FxHashMap(struct { u32, usize }, V) = .empty,
-    env_hc: swiss_map.FxHashMap(struct { usize, usize }, E) = .empty,
     spine_hc: swiss_map.FxHashMap(struct { usize, u8, u64, u64 }, S) = .empty,
     lam_hc: swiss_map.FxHashMap(struct { ExprPtr, usize, ExprPtr }, V) = .empty,
-    pi_hc: swiss_map.FxHashMap(struct { usize, usize, ExprPtr }, V) = .empty,
+    pi_hc: swiss_map.FxHashMap(struct { usize, usize, ExprPtr, u8, usize }, V) = .empty,
+    type_cache: swiss_map.FxHashMap(struct { usize, ExprPtr }, inference.CachedType) = .empty,
+    thunk_hc: swiss_map.FxHashMap(struct { usize, ExprPtr }, V) = .empty,
+    frame_envs: swiss_map.FxHashMap(usize, E) = .empty,
+    level_subs: swiss_map.FxHashMap(struct { LevelsPtr, LevelsPtr }, *const value.LevelSub) = .empty,
+    lsub_bases: swiss_map.FxHashMap(usize, E) = .empty,
     rigid_hc: swiss_map.FxHashMap(struct { u8, u64, u64, usize }, V) = .empty,
     unfold_hc: swiss_map.FxHashMap(struct { NamePtr, LevelsPtr, usize, usize }, V) = .empty,
     iota_stuck: swiss_map.FxHashSet(usize) = .empty,
@@ -68,8 +73,8 @@ const TcCache = struct {
 
     pub fn deinit(self: *TcCache) void {
         inline for (@typeInfo(TcCache).@"struct".fields) |f| {
-            if (comptime std.mem.eql(u8, f.name, "eq_cache")) {
-                self.eq_cache.deinit();
+            if (comptime (std.mem.eql(u8, f.name, "eq_cache") or std.mem.eql(u8, f.name, "value_eq"))) {
+                @field(self, f.name).deinit();
             } else if (comptime std.mem.eql(u8, f.name, "probe_depth")) {} else {
                 @field(self, f.name).deinit(util.smp_allocator);
             }
@@ -78,8 +83,8 @@ const TcCache = struct {
 
     pub fn clear(self: *TcCache) void {
         inline for (@typeInfo(TcCache).@"struct".fields) |f| {
-            if (comptime std.mem.eql(u8, f.name, "eq_cache")) {
-                self.eq_cache.clear();
+            if (comptime (std.mem.eql(u8, f.name, "eq_cache") or std.mem.eql(u8, f.name, "value_eq"))) {
+                @field(self, f.name).clear();
             } else if (comptime (std.mem.eql(u8, f.name, "probe_depth") or std.mem.eql(u8, f.name, "closed_eval_cache"))) {} else {
                 @field(self, f.name).clearRetainingCapacity();
             }
@@ -112,67 +117,54 @@ pub fn reject(comptime fmt: []const u8, args: anytype) Reject {
 pub const TypeChecker = struct {
     ctx: *TcCtx,
     env: *const Env,
-    tc_cache: TcCache,
+    tc_cache: *TcCache,
     arena: *Arena,
     local_v_cache: swiss_map.FxHashMap(ExprPtr, V),
     declar_info: ?DeclarInfo,
     nat_extension: bool,
+    frames: interner.FrameInterner,
 
     pub fn init(
         dag: *TcCtx,
         env_: *const Env,
         arena_: *Arena,
         declar_info: ?DeclarInfo,
+        cache: *TcCache,
     ) TypeChecker {
         util.assert(dag.dbj_level_counter == 0);
         const nat_extension = dag.export_file.config.nat_extension;
         return TypeChecker{
             .ctx = dag,
             .env = env_,
-            .tc_cache = .empty,
+            .tc_cache = cache,
             .arena = arena_,
             .local_v_cache = .{},
             .declar_info = declar_info,
             .nat_extension = nat_extension,
+            .frames = .empty,
         };
     }
 
     pub fn deinit(self: *TypeChecker) void {
-        self.tc_cache.deinit();
         self.local_v_cache.deinit(util.smp_allocator);
+        self.frames.deinit();
     }
 };
 
-fn checkDefLike(checker: *TypeChecker, d: *const Declar) Reject!void {
-    try checkDeclarInfo(checker, d);
-    const val = switch (d.*) {
-        .theorem => |x| x.val,
-        .definition => |x| x.val,
-        .opaque_ => |x| x.val,
-        else => unreachable,
-    };
-    const inferred_type = try infer(checker, val, .Check);
-    try assertDefEq(checker, inferred_type, d.info().ty);
-}
-
-pub fn checkDeclar(self: *const ExportFile, d: *const Declar) void {
+fn checkDeclarWith(self: *const ExportFile, d: *const Declar, ar: *Arena, ctx: *TcCtx, cache: *TcCache) void {
     if (d.* == .inductive) {
         return inductive.checkInductiveDeclar(self, d);
     }
-    var ar = Arena.init(util.smp_allocator);
-    defer ar.deinit();
-    var ctx = TcCtx.init(self, &ar);
-    defer TcCtx.deinit(&ctx);
     if (d.* == .quot) {
-        quot.checkQuot(&ctx, &ar, d) catch fail();
+        quot.checkQuot(ctx, ar, d) catch fail();
         return;
     }
     var e = self.newEnv(.{ .by_name = d.info().name });
-    var checker = TypeChecker.init(&ctx, &e, &ar, d.info().*);
+    var checker = TypeChecker.init(ctx, &e, ar, d.info().*, cache);
     defer checker.deinit();
     switch (d.*) {
-        .theorem, .definition, .opaque_ => checkDefLike(&checker, d) catch fail(),
-        .axiom, .constructor, .recursor => checkDeclarInfo(&checker, d) catch fail(),
+        .theorem, .definition, .opaque_ => inference.checkDefLike(&checker, d) catch failWithName(d),
+        .axiom, .constructor, .recursor => inference.checkDeclarInfo(&checker, d) catch failWithName(d),
         .inductive, .quot => unreachable,
     }
     switch (d.*) {
@@ -188,6 +180,24 @@ pub fn checkDeclar(self: *const ExportFile, d: *const Declar) void {
         },
         else => {},
     }
+}
+
+fn failWithName(d: *const Declar) void {
+    var buf: [512]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    @import("debug_printer.zig").debugPrint(&w, d.info().name) catch {};
+    std.debug.print("kernel: rejected declaration: {s}\n", .{w.buffered()});
+    fail();
+}
+
+pub fn checkDeclar(self: *const ExportFile, d: *const Declar) void {
+    var ar = Arena.init(util.smp_allocator);
+    defer ar.deinit();
+    var ctx = TcCtx.init(self, &ar);
+    defer TcCtx.deinit(&ctx);
+    var cache: TcCache = .empty;
+    defer cache.deinit();
+    checkDeclarWith(self, d, &ar, &ctx, &cache);
 }
 
 pub fn checkAllDeclarsSerial(self: *const ExportFile) void {

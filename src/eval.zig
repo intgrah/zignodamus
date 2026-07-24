@@ -1,5 +1,6 @@
 const std = @import("std");
 const conv = @import("conv.zig");
+const inference = @import("infer.zig");
 const level_mod = @import("level.zig");
 const env = @import("env.zig");
 const expr = @import("expr.zig");
@@ -17,6 +18,7 @@ const BinderStyle = expr.BinderStyle;
 const Expr = expr.Expr;
 const TypeChecker = tc.TypeChecker;
 const NatRed = @import("Dag.zig").NatRed;
+const FxHasher = @import("hash.zig").FxHasher;
 const BigUintPtr = ptr.BigUintPtr;
 const ExprPtr = ptr.ExprPtr;
 const LevelPtr = ptr.LevelPtr;
@@ -79,13 +81,125 @@ fn mkUnfoldHc(self: *TypeChecker, name: NamePtr, levels: LevelsPtr, spine: S, he
     return u;
 }
 
-fn envExtendHc(self: *TypeChecker, parent: E, v: V) E {
-    const key = .{ @intFromPtr(parent), @intFromPtr(v) };
-    const gop = self.tc_cache.env_hc.getOrPut(util.smp_allocator, key) catch util.oom();
+fn internFrame(self: *TypeChecker, mask: u64, slots: []const V, lsub: ?*const value.LevelSub) *const value.Frame {
+    var hasher = FxHasher{};
+    hasher.writeU64(mask);
+    hasher.writeU64(if (lsub) |l| @intFromPtr(l) else 0);
+    for (slots) |s| hasher.writeU64(@intFromPtr(s));
+    var probe = value.Frame{ .hash = hasher.finish(), .mask = mask, .slots = slots, .lsub = lsub };
+    if (self.frames.get(&probe)) |r| return r;
+    probe.slots = self.arena.dupe(V, slots);
+    return self.frames.insert(self.arena, &probe);
+}
+
+fn internLevelSub(self: *TypeChecker, ks: LevelsPtr, vs: LevelsPtr) *const value.LevelSub {
+    const key = .{ ks, vs };
+    const gop = self.tc_cache.level_subs.getOrPut(util.smp_allocator, key) catch util.oom();
     if (gop.found_existing) return gop.value_ptr.*;
-    const e = value.envExtend(self.arena, parent, v);
+    const ls = self.arena.create(value.LevelSub);
+    ls.* = .{ .ks = ks, .vs = vs };
+    gop.value_ptr.* = ls;
+    return ls;
+}
+
+fn lsubBase(self: *TypeChecker, lsub: ?*const value.LevelSub) E {
+    const ls = lsub orelse return value.envEmpty();
+    const gop = self.tc_cache.lsub_bases.getOrPut(util.smp_allocator, @intFromPtr(ls)) catch util.oom();
+    if (gop.found_existing) return gop.value_ptr.*;
+    const e = self.arena.create(value.Env);
+    e.* = value.Env.nil;
+    e.lsub = ls;
+    e.hash = @intFromPtr(ls);
     gop.value_ptr.* = e;
     return e;
+}
+
+pub fn evalInst(self: *TypeChecker, ex: ExprPtr, ks: LevelsPtr, vs: LevelsPtr) V {
+    if (ks.eql(vs) or ks.asRef().len == 0) {
+        util.assert(ks.asRef().len == vs.asRef().len);
+        return eval(self, 0, value.envEmpty(), ex);
+    }
+    util.assert(ks.asRef().len == vs.asRef().len);
+    return eval(self, 0, lsubBase(self, internLevelSub(self, ks, vs)), ex);
+}
+
+fn frameEnv(self: *TypeChecker, f: *const value.Frame) E {
+    const gop = self.tc_cache.frame_envs.getOrPut(util.smp_allocator, @intFromPtr(f)) catch util.oom();
+    if (gop.found_existing) return gop.value_ptr.*;
+    const e = self.arena.create(value.Env);
+    e.* = .{
+        .v = undefined,
+        .parent = undefined,
+        .frame = f,
+        .lsub = f.lsub,
+        .hash = f.hash,
+        .len = 64 - @clz(f.mask),
+        .prune_mask = 0,
+        .prune_r = undefined,
+    };
+    gop.value_ptr.* = e;
+    return e;
+}
+
+fn pruneEnv(self: *TypeChecker, e: E, mask: u64) E {
+    if (mask == 0) return lsubBase(self, e.lsub);
+    if (e.len == 0) return e;
+    if (e.frame) |f| {
+        if (f.mask == mask) return e;
+    }
+    if (e.prune_mask == mask) return e.prune_r;
+    var buf: [64]V = undefined;
+    var n: usize = 0;
+    var out_mask: u64 = 0;
+    var rem = mask;
+    var consumed: u6 = 0;
+    var cur = e;
+    while (rem != 0 and cur != &value.Env.nil) {
+        if (cur.frame) |f| {
+            while (rem != 0) {
+                const j: u6 = @intCast(@ctz(rem));
+                rem &= rem - 1;
+                if (j < 64 - @as(u7, consumed) and (f.mask >> j) & 1 != 0) {
+                    const below = f.mask & ((@as(u64, 1) << j) - 1);
+                    buf[n] = f.slots[@popCount(below)];
+                    out_mask |= @as(u64, 1) << (consumed + j);
+                    n += 1;
+                }
+            }
+            break;
+        }
+        if (rem & 1 != 0) {
+            buf[n] = cur.v;
+            out_mask |= @as(u64, 1) << consumed;
+            n += 1;
+        }
+        rem >>= 1;
+        if (rem == 0) break;
+        consumed += 1;
+        cur = cur.parent;
+    }
+    const r = frameEnv(self, internFrame(self, out_mask, buf[0..n], e.lsub));
+    const m = @constCast(e);
+    m.prune_mask = mask;
+    m.prune_r = r;
+    return r;
+}
+
+pub fn keyEnv(self: *TypeChecker, e: E, ex: ExprPtr) E {
+    const k = ex.numLooseBvars();
+    if (k == 0) return lsubBase(self, e.lsub);
+    if (k > 64) return e;
+    return pruneEnv(self, e, ex.asRef().fv_mask);
+}
+
+pub fn mkThunkHc(self: *TypeChecker, e: E, ex: ExprPtr) V {
+    const te = keyEnv(self, e, ex);
+    const key = .{ @intFromPtr(te), ex };
+    const gop = self.tc_cache.thunk_hc.getOrPut(util.smp_allocator, key) catch util.oom();
+    if (gop.found_existing) return gop.value_ptr.*;
+    const v = value.mkThunk(self.arena, te, ex);
+    gop.value_ptr.* = v;
+    return v;
 }
 
 inline fn spineSnocHc(self: *TypeChecker, prev: S, elim: Elim) S {
@@ -113,20 +227,25 @@ inline fn mkLamHc(
     binder_name: NamePtr,
     binder_style: BinderStyle,
     binder_type: ExprPtr,
-    e: E,
-    body_expr: ExprPtr,
+    body: Closure,
 ) V {
-    const key = .{ binder_type, @intFromPtr(e), body_expr };
+    std.debug.assert(body.kind == .eval);
+    const key = .{ binder_type, @intFromPtr(body.env), body.body };
     const gop = self.tc_cache.lam_hc.getOrPut(util.smp_allocator, key) catch util.oom();
     if (gop.found_existing) return gop.value_ptr.*;
-    const v = value.mkLam(self.arena, binder_name, binder_style, binder_type, Closure{ .env = e, .body = body_expr });
+    const v = value.mkLam(self.arena, binder_name, binder_style, binder_type, body);
     gop.value_ptr.* = v;
     return v;
 }
 
-inline fn canonicalizeForSpine(self: *TypeChecker, v: V) V {
-    if (v.* == .thunk) {
-        return v;
+inline fn canonicalizeForSpine(self: *TypeChecker, v_in: V) V {
+    var v = v_in;
+    while (v.* == .thunk) {
+        if (v.thunk.forced) |f| {
+            v = f;
+        } else {
+            return v;
+        }
     }
     const key = @intFromPtr(v);
     if (self.tc_cache.canon_cache.get(key)) |c| {
@@ -157,8 +276,8 @@ fn canonSpine(self: *TypeChecker, spine: S) S {
 
 fn canonCompute(self: *TypeChecker, v: V) V {
     switch (v.*) {
-        .lam => |l| return mkLamHc(self, l.binder_name, l.binder_style, l.binder_type, l.body.env, l.body.body),
-        .pi => |p| return mkPiHc(self, p.binder_name, p.binder_style, p.domain, p.body.env, p.body.body),
+        .lam => |l| return mkLamHc(self, l.binder_name, l.binder_style, l.binder_type, l.body),
+        .pi => |p| return mkPiHc(self, p.binder_name, p.binder_style, p.domain, p.body),
         .sort => |s| return canonContent(self, 0, s.level.getHash(), v),
         .nat_lit => |n| return canonContent(self, 1, n.ptr.getHash(), v),
         .str_lit => |s| return canonContent(self, 2, s.ptr.getHash(), v),
@@ -183,13 +302,12 @@ inline fn mkPiHc(
     binder_name: NamePtr,
     binder_style: BinderStyle,
     domain: V,
-    e: E,
-    body_expr: ExprPtr,
+    body: Closure,
 ) V {
-    const key = .{ @intFromPtr(domain), @intFromPtr(e), body_expr };
+    const key = .{ @intFromPtr(domain), @intFromPtr(body.env), body.body, @intFromEnum(body.kind), @intFromPtr(body.ctx) };
     const gop = self.tc_cache.pi_hc.getOrPut(util.smp_allocator, key) catch util.oom();
     if (gop.found_existing) return gop.value_ptr.*;
-    const v = value.mkPi(self.arena, binder_name, binder_style, domain, Closure{ .env = e, .body = body_expr });
+    const v = value.mkPi(self.arena, binder_name, binder_style, domain, body);
     gop.value_ptr.* = v;
     return v;
 }
@@ -199,18 +317,16 @@ pub fn eval(self: *TypeChecker, depth: u32, e: E, ex: ExprPtr) V {
         .app, .pi, .lambda, .let, .proj => {},
         else => return evalNoCache(self, depth, e, ex),
     }
-    if (ex.numLooseBvars() == 0) {
+    if (ex.numLooseBvars() == 0 and e.lsub == null) {
         return evalClosed(self, depth, e, ex);
     }
-    const key = .{ @intFromPtr(e), ex };
+    const te = keyEnv(self, e, ex);
+    const key = .{ @intFromPtr(te), ex };
     if (self.tc_cache.open_eval_cache.get(key)) |v| {
         return v;
     }
-    const v = evalNoCache(self, depth, e, ex);
-    const newly = (self.tc_cache.open_eval_seen.fetchPut(util.smp_allocator, ex, {}) catch util.oom()) == null;
-    if (!newly) {
-        self.tc_cache.open_eval_cache.put(util.smp_allocator, key, v) catch util.oom();
-    }
+    const v = evalNoCache(self, depth, te, ex);
+    self.tc_cache.open_eval_cache.put(util.smp_allocator, key, v) catch util.oom();
     return v;
 }
 
@@ -338,13 +454,13 @@ fn evalNoCache(self: *TypeChecker, depth: u32, e: E, ex: ExprPtr) V {
         };
         if (f.* == .lam) {
             const clo = f.lam.body;
-            const a = if (trivial) eval(self, depth, e, arg) else value.mkThunk(self.arena, e, arg);
+            const a = if (trivial) eval(self, depth, e, arg) else mkThunkHc(self, e, arg);
             const clo_env = clo.env;
             const clo_body = clo.body;
-            const new_env = envExtendHc(self, clo_env, a);
+            const new_env = value.envExtend(self.arena, clo_env, a);
             return eval(self, depth, new_env, clo_body);
         }
-        const a = if (trivial) eval(self, depth, e, arg) else value.mkThunk(self.arena, e, arg);
+        const a = if (trivial) eval(self, depth, e, arg) else mkThunkHc(self, e, arg);
         return apply(self, depth, f, a);
     }
     switch (first) {
@@ -352,16 +468,22 @@ fn evalNoCache(self: *TypeChecker, depth: u32, e: E, ex: ExprPtr) V {
             const v = e.lookup(vr.dbj_idx) orelse @panic("eval: loose bvar");
             return forceThunk(self, depth, v);
         },
-        .sort => |s| return value.mkSort(self.arena, level_mod.simplify(self.ctx, s.level)),
-        .@"const" => |c| return evalConst(self, c.name, c.levels),
+        .sort => |s| {
+            const l = if (e.lsub) |ls| level_mod.substLevel(self.ctx, s.level, ls.ks, ls.vs) else s.level;
+            return value.mkSort(self.arena, level_mod.simplify(self.ctx, l));
+        },
+        .@"const" => |c| {
+            const levels = if (e.lsub) |ls| level_mod.substLevels(self.ctx, c.levels, ls.ks, ls.vs) else c.levels;
+            return evalConst(self, c.name, levels);
+        },
         .app => unreachable,
-        .lambda => |l| return value.mkLam(self.arena, l.binder_name, l.binder_style, l.binder_type, Closure{ .env = e, .body = l.body }),
+        .lambda => |l| return value.mkLam(self.arena, l.binder_name, l.binder_style, l.binder_type, Closure{ .env = keyEnv(self, e, ex), .body = l.body }),
         .pi => |p| {
             const dom = switch (p.binder_type.asRef().kind) {
                 .@"var", .sort, .@"const", .nat_lit, .string_lit, .local => eval(self, depth, e, p.binder_type),
-                else => value.mkThunk(self.arena, e, p.binder_type),
+                else => mkThunkHc(self, e, p.binder_type),
             };
-            return value.mkPi(self.arena, p.binder_name, p.binder_style, dom, Closure{ .env = e, .body = p.body });
+            return value.mkPi(self.arena, p.binder_name, p.binder_style, dom, Closure{ .env = keyEnv(self, e, ex), .body = p.body });
         },
         .let => {
             var cur_env = e;
@@ -370,7 +492,7 @@ fn evalNoCache(self: *TypeChecker, depth: u32, e: E, ex: ExprPtr) V {
                 const ce = cursor.asRef().kind;
                 if (ce == .let) {
                     const vv = eval(self, depth, cur_env, ce.let.data.val);
-                    cur_env = envExtendHc(self, cur_env, vv);
+                    cur_env = value.envExtend(self.arena, cur_env, vv);
                     cursor = ce.let.data.body;
                 } else {
                     break;
@@ -429,7 +551,7 @@ pub fn constResultLevel(self: *TypeChecker, name: NamePtr, levels: LevelsPtr) ?L
         switch (cur_f.*) {
             .pi => |p| {
                 const fresh = mkBvarHc(self, binder_depth, p.domain);
-                cur = applyClosure(self, binder_depth + 1, &cur_f.pi.body, fresh);
+                cur = applyClosure(self, binder_depth + 1, &cur_f.pi.body, fresh, p.domain);
                 binder_depth += 1;
             },
             .sort => |s| {
@@ -447,9 +569,7 @@ pub fn constHeadType(self: *TypeChecker, name: NamePtr, levels: LevelsPtr) V {
         return cached;
     }
     const info = (self.env.getDeclar(name) orelse @panic("const_head_type: unknown const")).info().*;
-    const ty_e = expr.substExprLevels(self.ctx, info.ty, info.uparams, levels);
-    const empty = value.envEmpty();
-    const v = eval(self, 0, empty, ty_e);
+    const v = evalInst(self, info.ty, info.uparams, levels);
     self.tc_cache.const_head_type_cache.put(util.smp_allocator, .{ name, levels }, v) catch util.oom();
     return v;
 }
@@ -489,7 +609,7 @@ pub inline fn apply(self: *TypeChecker, depth: u32, f: V, a: V) V {
         .lam => |l| {
             const clo_env = l.body.env;
             const clo_body = l.body.body;
-            const e = envExtendHc(self, clo_env, a);
+            const e = value.envExtend(self.arena, clo_env, a);
             return eval(self, depth, e, clo_body);
         },
         .rigid => |r| {
@@ -528,11 +648,15 @@ pub inline fn apply(self: *TypeChecker, depth: u32, f: V, a: V) V {
     }
 }
 
-pub fn applyClosure(self: *TypeChecker, depth: u32, clo: *const Closure, v: V) V {
-    const clo_env = clo.env;
-    const clo_body = clo.body;
-    const e = envExtendHc(self, clo_env, v);
-    return eval(self, depth, e, clo_body);
+pub fn applyClosure(self: *TypeChecker, depth: u32, clo: *const Closure, v: V, binder_ty: ?V) V {
+    const e = value.envExtend(self.arena, clo.env, v);
+    switch (clo.kind) {
+        .eval => return eval(self, depth, e, clo.body),
+        .infer => {
+            const c = value.ctxExtend(self.arena, clo.ctx, binder_ty orelse @panic("apply_closure: infer closure without binder type"));
+            return inference.infer(self, depth, e, c, clo.body, .InferOnly) catch @panic("infer failed in closure application");
+        },
+    }
 }
 
 fn tryFireRigid(self: *TypeChecker, depth: u32, head: RigidHead, spine: S) V {
@@ -638,7 +762,7 @@ fn spineType(self: *TypeChecker, depth: u32, ty0: V, head: RigidHead, spine: S) 
             const a = elim.appV();
             const ty_f = forceAll(self, depth, ty);
             switch (ty_f.*) {
-                .pi => ty = applyClosure(self, depth, &ty_f.pi.body, a),
+                .pi => ty = applyClosure(self, depth, &ty_f.pi.body, a, ty_f.pi.domain),
                 else => @panic("spine_type: expected Pi"),
             }
             prefix = value.spineSnoc(self.arena, prefix, Elim.mkApp(a));
@@ -661,7 +785,7 @@ fn spineTypeWithValue(self: *TypeChecker, depth: u32, ty0: V, prev_head: V, spin
             const a = elim.appV();
             const ty_f = forceAll(self, depth, ty);
             switch (ty_f.*) {
-                .pi => ty = applyClosure(self, depth, &ty_f.pi.body, a),
+                .pi => ty = applyClosure(self, depth, &ty_f.pi.body, a, ty_f.pi.domain),
                 else => @panic("spine_type_with_value: expected Pi"),
             }
             prev = apply(self, depth, prev, a);
@@ -787,11 +911,7 @@ pub fn projFieldTypeWith(
         .constructor => |c| c.info,
         else => return null,
     };
-    const ctor_ty_e = expr.substExprLevels(self.ctx, ctor_info.ty, ctor_info.uparams, ind_levels);
-    var cur = blk: {
-        const empty = value.envEmpty();
-        break :blk eval(self, depth, empty, ctor_ty_e);
-    };
+    var cur = evalInst(self, ctor_info.ty, ctor_info.uparams, ind_levels);
     const num_params = @as(usize, ind.num_params);
     var i: usize = 0;
     while (i < num_params) : (i += 1) {
@@ -800,7 +920,7 @@ pub fn projFieldTypeWith(
             .pi => {
                 if (i >= args.len) return null;
                 const arg = args[i];
-                cur = applyClosure(self, depth, &cf.pi.body, arg);
+                cur = applyClosure(self, depth, &cf.pi.body, arg, cf.pi.domain);
             },
             else => return null,
         }
@@ -811,7 +931,7 @@ pub fn projFieldTypeWith(
         switch (cf.*) {
             .pi => {
                 const prior = doProj(self, depth, ty_name, i, struct_value);
-                cur = applyClosure(self, depth, &cf.pi.body, prior);
+                cur = applyClosure(self, depth, &cf.pi.body, prior, cf.pi.domain);
             },
             else => return null,
         }
@@ -1094,9 +1214,7 @@ pub fn unfoldConst(self: *TypeChecker, name: NamePtr, levels: LevelsPtr) ?V {
     if (levels.asRef().len != def_uparams.asRef().len) {
         return null;
     }
-    const body = expr.substExprLevels(self.ctx, def_value, def_uparams, levels);
-    const empty = value.envEmpty();
-    const v = eval(self, 0, empty, body);
+    const v = evalInst(self, def_value, def_uparams, levels);
     self.tc_cache.unfold_const_cache.put(util.smp_allocator, .{ name, levels }, v) catch util.oom();
     return v;
 }
@@ -1182,9 +1300,7 @@ fn fireRecursor(
     var result = if (self.tc_cache.rec_rule_cache.get(cache_key)) |v|
         v
     else blk: {
-        const body = expr.substExprLevels(self.ctx, rec_rule.val, rec.info.uparams, levels);
-        const empty = value.envEmpty();
-        const v = eval(self, 0, empty, body);
+        const v = evalInst(self, rec_rule.val, rec.info.uparams, levels);
         self.tc_cache.rec_rule_cache.put(util.smp_allocator, cache_key, v) catch util.oom();
         break :blk v;
     };

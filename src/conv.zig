@@ -65,6 +65,13 @@ pub fn convTypesAt(self: *TypeChecker, depth: u32, a: V, b: V) bool {
     return conv(self, true, depth, a, b);
 }
 
+pub fn defEqAt(self: *TypeChecker, depth: u32, vx: V, vy: V) bool {
+    if (tryProofIrrelAt(self, depth, vx, vy)) {
+        return true;
+    }
+    return convTypesAt(self, depth, vx, vy);
+}
+
 fn envsPtrEqual(e1: E, e2: E) bool {
     var a = e1;
     var b = e2;
@@ -74,6 +81,9 @@ fn envsPtrEqual(e1: E, e2: E) bool {
             return true;
         }
         if (a == nil or b == nil) {
+            return false;
+        }
+        if (a.frame != null or b.frame != null) {
             return false;
         }
         if (a.hash != b.hash) {
@@ -88,42 +98,42 @@ fn envsPtrEqual(e1: E, e2: E) bool {
 }
 
 fn conv(self: *TypeChecker, comptime RIGID: bool, depth: u32, x_in: V, y_in: V) bool {
-    var x = x_in;
-    var y = y_in;
-    while (true) {
-        x = eval.forceThunk(self, depth, x);
-        y = eval.forceThunk(self, depth, y);
-        if (x == y) {
+    const x = eval.forceThunk(self, depth, x_in);
+    const y = eval.forceThunk(self, depth, y_in);
+    if (x == y) {
+        return true;
+    }
+    if (bvarSingleApps(x, y)) |args| {
+        if (conv(self, RIGID, depth, args[0], args[1])) {
             return true;
         }
-        switch (x.*) {
-            .rigid => |rx| switch (rx.head) {
-                .b_var => |la| switch (y.*) {
-                    .rigid => |ry| switch (ry.head) {
-                        .b_var => |lb| {
-                            if (la.lvl == lb.lvl) {
-                                const sx = rx.spine;
-                                const sy = ry.spine;
-                                if (sx != &Spine.empty and sx.prev == &Spine.empty and sx.elim.isApp() and
-                                    sy != &Spine.empty and sy.prev == &Spine.empty and sy.elim.isApp())
-                                {
-                                    x = sx.elim.appV();
-                                    y = sy.elim.appV();
-                                } else {
-                                    return convGeneral(self, RIGID, depth, x, y);
-                                }
-                            } else {
-                                return convGeneral(self, RIGID, depth, x, y);
-                            }
-                        },
-                        else => return convGeneral(self, RIGID, depth, x, y),
+    }
+    return convGeneral(self, RIGID, depth, x, y);
+}
+
+fn bvarSingleApps(x: V, y: V) ?[2]V {
+    switch (x.*) {
+        .rigid => |rx| switch (rx.head) {
+            .b_var => |la| switch (y.*) {
+                .rigid => |ry| switch (ry.head) {
+                    .b_var => |lb| {
+                        if (la.lvl != lb.lvl) return null;
+                        const sx = rx.spine;
+                        const sy = ry.spine;
+                        if (sx != &Spine.empty and sx.prev == &Spine.empty and sx.elim.isApp() and
+                            sy != &Spine.empty and sy.prev == &Spine.empty and sy.elim.isApp())
+                        {
+                            return .{ sx.elim.appV(), sy.elim.appV() };
+                        }
+                        return null;
                     },
-                    else => return convGeneral(self, RIGID, depth, x, y),
+                    else => return null,
                 },
-                else => return convGeneral(self, RIGID, depth, x, y),
+                else => return null,
             },
-            else => return convGeneral(self, RIGID, depth, x, y),
-        }
+            else => return null,
+        },
+        else => return null,
     }
 }
 
@@ -135,15 +145,15 @@ fn isLam(v: V) bool {
 }
 
 fn convGeneral(self: *TypeChecker, comptime RIGID: bool, depth: u32, x: V, y: V) bool {
+    const xa = @intFromPtr(x);
+    const ya = @intFromPtr(y);
     const cacheable = isCacheable(x) or isCacheable(y);
     const neg_eligible = !isLam(x) and !isLam(y);
     if (cacheable) {
-        const xa = @intFromPtr(x);
-        const ya = @intFromPtr(y);
-        const cache_key = if (xa < ya) .{ xa, ya } else .{ ya, xa };
-        if (self.tc_cache.conv_cache.contains(cache_key)) {
+        if (self.tc_cache.value_eq.checkEqIfKnown(xa, ya)) {
             return true;
         }
+        const cache_key = if (xa < ya) .{ xa, ya } else .{ ya, xa };
         if (RIGID and neg_eligible) {
             if (self.tc_cache.conv_cache_neg.contains(cache_key)) {
                 return false;
@@ -154,7 +164,7 @@ fn convGeneral(self: *TypeChecker, comptime RIGID: bool, depth: u32, x: V, y: V)
         }
         const result = convNoCache(self, RIGID, depth, x, y);
         if (result) {
-            self.tc_cache.conv_cache.put(util.smp_allocator, cache_key, {}) catch util.oom();
+            self.tc_cache.value_eq.unite(xa, ya);
         } else if (RIGID and neg_eligible) {
             if (self.tc_cache.probe_depth == 0) {
                 self.tc_cache.conv_cache_neg.put(util.smp_allocator, cache_key, {}) catch util.oom();
@@ -268,7 +278,7 @@ fn convDirect(self: *TypeChecker, comptime RIGID: bool, depth: u32, t: V, t2: V)
     switch (t.*) {
         .pi => |bx_pi| switch (t2.*) {
             .pi => |by_pi| {
-                if (bx_pi.body.body == by_pi.body.body and bx_pi.domain == by_pi.domain and envsPtrEqual(bx_pi.body.env, by_pi.body.env)) {
+                if (bx_pi.body.body == by_pi.body.body and bx_pi.domain == by_pi.domain and bx_pi.body.kind == by_pi.body.kind and envsPtrEqual(bx_pi.body.env, by_pi.body.env)) {
                     return true;
                 }
                 if (!conv(self, RIGID, depth, bx_pi.domain, by_pi.domain)) {
@@ -276,8 +286,8 @@ fn convDirect(self: *TypeChecker, comptime RIGID: bool, depth: u32, t: V, t2: V)
                 }
                 const dx = bx_pi.domain;
                 const fresh = eval.mkBvarHc(self, depth, dx);
-                const vx = eval.applyClosure(self, depth + 1, &bx_pi.body, fresh);
-                const vy = eval.applyClosure(self, depth + 1, &by_pi.body, fresh);
+                const vx = eval.applyClosure(self, depth + 1, &bx_pi.body, fresh, dx);
+                const vy = eval.applyClosure(self, depth + 1, &by_pi.body, fresh, dx);
                 return conv(self, RIGID, depth + 1, vx, vy);
             },
             else => {},
@@ -289,8 +299,8 @@ fn convDirect(self: *TypeChecker, comptime RIGID: bool, depth: u32, t: V, t2: V)
                 }
                 const dx = eval.lamDomain(self, depth, t);
                 const fresh = eval.mkBvarHc(self, depth, dx);
-                const vx = eval.applyClosure(self, depth + 1, &bx_lam.body, fresh);
-                const vy = eval.applyClosure(self, depth + 1, &by_lam.body, fresh);
+                const vx = eval.applyClosure(self, depth + 1, &bx_lam.body, fresh, null);
+                const vy = eval.applyClosure(self, depth + 1, &by_lam.body, fresh, null);
                 return conv(self, RIGID, depth + 1, vx, vy);
             },
             else => {},
@@ -524,7 +534,7 @@ fn convCold(self: *TypeChecker, comptime RIGID: bool, depth: u32, x: V, y: V) bo
             if (!isLam(y)) {
                 const domain = eval.lamDomain(self, depth, x);
                 const fresh = eval.mkBvarHc(self, depth, domain);
-                const lhs = eval.applyClosure(self, depth + 1, &lx.body, fresh);
+                const lhs = eval.applyClosure(self, depth + 1, &lx.body, fresh, null);
                 const rhs = eval.apply(self, depth + 1, y, fresh);
                 return conv(self, true, depth + 1, lhs, rhs);
             }
@@ -537,7 +547,7 @@ fn convCold(self: *TypeChecker, comptime RIGID: bool, depth: u32, x: V, y: V) bo
                 const domain = eval.lamDomain(self, depth, y);
                 const fresh = eval.mkBvarHc(self, depth, domain);
                 const lhs = eval.apply(self, depth + 1, x, fresh);
-                const rhs = eval.applyClosure(self, depth + 1, &ly.body, fresh);
+                const rhs = eval.applyClosure(self, depth + 1, &ly.body, fresh, null);
                 return conv(self, true, depth + 1, lhs, rhs);
             }
         },
@@ -609,7 +619,7 @@ fn tryProofIrrelAt(self: *TypeChecker, depth: u32, x: V, y: V) bool {
     return convTypesAt(self, depth, tx, ty);
 }
 
-fn isPropType(self: *TypeChecker, depth: u32, t: V) bool {
+pub fn isPropType(self: *TypeChecker, depth: u32, t: V) bool {
     if (levelOfType(self, depth, t)) |l| {
         return level.isZero(self.ctx, l);
     } else {
@@ -786,7 +796,7 @@ fn levelOfType(self: *TypeChecker, depth: u32, ty_in: V) ?LevelPtr {
         .pi => |p| {
             const l_dom = levelOfType(self, depth, p.domain) orelse return null;
             const fresh = eval.mkBvarHc(self, depth, p.domain);
-            const cod = eval.applyClosure(self, depth + 1, &p.body, fresh);
+            const cod = eval.applyClosure(self, depth + 1, &p.body, fresh, p.domain);
             const cod_f = eval.forceAll(self, depth + 1, cod);
             const l_cod = levelOfType(self, depth + 1, cod_f) orelse return null;
             const l = TcCtx.imax(self.ctx, l_dom, l_cod);

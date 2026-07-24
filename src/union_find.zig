@@ -71,6 +71,12 @@ pub fn UnionFind(comptime A: type) type {
             self.linkRoots(a_root, b_root);
         }
 
+        pub fn checkEqIfKnown(self: *Self, a: A, b: A) bool {
+            const ia = self.index_of.get(a) orelse return false;
+            const ib = self.index_of.get(b) orelse return false;
+            return self.findParentIdx(ia) == self.findParentIdx(ib);
+        }
+
         pub fn checkUfEq(self: *Self, e1: A, e2: A) bool {
             const idx1 = self.getOrPush(e1);
             const idx2 = self.getOrPush(e2);

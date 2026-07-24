@@ -49,6 +49,7 @@ pub const LetData = struct {
 
 pub const Expr = struct {
     hash: u64,
+    fv_mask: u64,
     kind: Kind,
 
     pub const Kind = union(enum) {
@@ -101,7 +102,7 @@ pub const Expr = struct {
     };
 
     pub inline fn mk(kind: Kind) Expr {
-        return .{ .hash = kindHash(kind), .kind = kind };
+        return .{ .hash = kindHash(kind), .fv_mask = maskOf(kind), .kind = kind };
     }
 
     pub fn getHash(self: *const Expr) u64 {
@@ -681,4 +682,45 @@ pub fn getMajorInduct(rec: *const env.RecursorData) ?NamePtr {
     } else {
         return null;
     }
+}
+
+fn childMask(e: ExprPtr) u64 {
+    const k = e.numLooseBvars();
+    if (k == 0) return 0;
+    if (k <= 64) return e.asRef().fv_mask;
+    return 0;
+}
+
+fn bodyMask(body: ExprPtr) u64 {
+    const k = body.numLooseBvars();
+    if (k == 0) return 0;
+    if (k <= 64) return body.asRef().fv_mask >> 1;
+    return std.math.maxInt(u64);
+}
+
+fn maskOf(kind: Expr.Kind) u64 {
+    return switch (kind) {
+        .@"var" => |x| if (x.dbj_idx < 64) @as(u64, 1) << @intCast(x.dbj_idx) else 0,
+        .app => |x| childMask(x.fun) | childMask(x.arg),
+        .pi => |x| childMask(x.binder_type) | bodyMask(x.body),
+        .lambda => |x| childMask(x.binder_type) | bodyMask(x.body),
+        .let => |x| childMask(x.data.binder_type) | childMask(x.data.val) | bodyMask(x.data.body),
+        .proj => |x| childMask(x.structure),
+        .sort, .@"const", .local, .string_lit, .nat_lit => 0,
+    };
+}
+
+pub fn hasLooseBvar(e: ExprPtr, idx: u16) bool {
+    if (e.numLooseBvars() <= idx) {
+        return false;
+    }
+    return switch (e.asRef().kind) {
+        .@"var" => |x| x.dbj_idx == idx,
+        .app => |x| hasLooseBvar(x.fun, idx) or hasLooseBvar(x.arg, idx),
+        .pi => |x| hasLooseBvar(x.binder_type, idx) or hasLooseBvar(x.body, idx + 1),
+        .lambda => |x| hasLooseBvar(x.binder_type, idx) or hasLooseBvar(x.body, idx + 1),
+        .let => |x| hasLooseBvar(x.data.binder_type, idx) or hasLooseBvar(x.data.val, idx) or hasLooseBvar(x.data.body, idx + 1),
+        .proj => |x| hasLooseBvar(x.structure, idx),
+        .sort, .@"const", .local, .string_lit, .nat_lit => false,
+    };
 }

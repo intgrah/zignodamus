@@ -62,7 +62,9 @@ fn checkInductiveDeclarChecked(
 
     const unmodified_tys_ctors = blk: {
         var e = self.newEnv(env_limit);
-        var tcr = TypeChecker.init(&ctx, &e, &ar, null);
+        var cache: tc.TcCache = .empty;
+        defer cache.deinit();
+        var tcr = TypeChecker.init(&ctx, &e, &ar, null, &cache);
         defer tcr.deinit();
         try tc.checkDeclarInfo(&tcr, d);
         break :blk collectUnmodifiedMutuals(&tcr, ind);
@@ -70,14 +72,18 @@ fn checkInductiveDeclarChecked(
 
     var st = blk: {
         var e = self.newEnv(env_limit);
-        var tcr = TypeChecker.init(&ctx, &e, &ar, null);
+        var cache: tc.TcCache = .empty;
+        defer cache.deinit();
+        var tcr = TypeChecker.init(&ctx, &e, &ar, null, &cache);
         defer tcr.deinit();
         break :blk try specializeNested(&tcr, ind, cloneHeaders(&tcr, unmodified_tys_ctors));
     };
 
     {
         var e = self.newEnv(env_limit);
-        var tcr = TypeChecker.init(&ctx, &e, &ar, null);
+        var cache: tc.TcCache = .empty;
+        defer cache.deinit();
+        var tcr = TypeChecker.init(&ctx, &e, &ar, null, &cache);
         defer tcr.deinit();
         try checkInductiveSpecs(&tcr, &st);
     }
@@ -86,7 +92,9 @@ fn checkInductiveDeclarChecked(
 
     {
         var e = env.Env.initWithTempExt(&self.declars, &ind_ty_ext1, env_limit);
-        var tcr = TypeChecker.init(&ctx, &e, &ar, null);
+        var cache: tc.TcCache = .empty;
+        defer cache.deinit();
+        var tcr = TypeChecker.init(&ctx, &e, &ar, null, &cache);
         defer tcr.deinit();
         for (st.all_inductives_incl_specialized.items) |*ind_| {
             for (ind_.ctors.items) |ctor| {
@@ -99,7 +107,9 @@ fn checkInductiveDeclarChecked(
 
     const recursors = blk: {
         var e = env.Env.initWithTempExt(&self.declars, &ctor_extension, env_limit);
-        var tcr = TypeChecker.init(&ctx, &e, &ar, null);
+        var cache: tc.TcCache = .empty;
+        defer cache.deinit();
+        var tcr = TypeChecker.init(&ctx, &e, &ar, null, &cache);
         defer tcr.deinit();
         try mkElimLevel(&tcr, &st);
         initKTarget(&st);
@@ -116,7 +126,9 @@ fn checkInductiveDeclarChecked(
 
     {
         var e = env.Env.initWithTempExt(&self.declars, &recursor_extension, env_limit);
-        var tcr = TypeChecker.init(&ctx, &e, &ar, null);
+        var cache: tc.TcCache = .empty;
+        defer cache.deinit();
+        var tcr = TypeChecker.init(&ctx, &e, &ar, null, &cache);
         defer tcr.deinit();
         if (isNested(&st)) {
             try restoreAndCheck(&tcr, &st, &unmodified_tys_ctors, ind.all_ind_names);

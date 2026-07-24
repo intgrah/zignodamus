@@ -44,7 +44,9 @@ pub fn checkEq(ctx: *TcCtx, ar: *Arena, declar: *const Declar) tc.Reject!void {
         const alpha = TcCtx.mkUnique(ctx, alpha_name, .implicit, uparam);
         const inner = TcCtx.mkPi(ctx, TcCtx.anonymous(ctx), .default, alpha, TcCtx.mkPi(ctx, TcCtx.anonymous(ctx), .default, alpha, prop));
         const expected = expr.abstrPi(ctx, alpha, inner);
-        var checker = tc.TypeChecker.init(ctx, &e, ar, info);
+        var cache: tc.TcCache = .empty;
+        defer cache.deinit();
+        var checker = tc.TypeChecker.init(ctx, &e, ar, info, &cache);
         try tc.assertDefEq(&checker, info.ty, expected);
         if (all_ctor_names.len == 1) {
             const ctor_name = all_ctor_names[0];
@@ -64,7 +66,9 @@ pub fn checkEq(ctx: *TcCtx, ar: *Arena, declar: *const Declar) tc.Reject!void {
 
                 const app = TcCtx.mkApp(ctx, TcCtx.mkApp(ctx, TcCtx.mkApp(ctx, eq_const, alpha2), a), a);
                 const expected2 = expr.abstrPi(ctx, alpha2, expr.abstrPi(ctx, a, app));
-                var checker2 = tc.TypeChecker.init(ctx, &e, ar, cinfo);
+                var cache2: tc.TcCache = .empty;
+                defer cache2.deinit();
+                var checker2 = tc.TypeChecker.init(ctx, &e, ar, cinfo, &cache2);
                 try tc.assertDefEq(&checker2, cinfo.ty, expected2);
             } else return checkerReject("Eq.refl constructor missing");
         } else {
@@ -132,11 +136,15 @@ pub fn checkQuot(ctx: *TcCtx, ar: *Arena, declar: *const Declar) tc.Reject!void 
 
     if (declar.info().name == TcCtx.str1(ctx, "Quot")) {
         const e = ctx.export_file.newEnv(EnvLimit{ .by_name = quot_name });
-        var checker = tc.TypeChecker.init(ctx, &e, ar, declar.info().*);
+        var cache: tc.TcCache = .empty;
+        defer cache.deinit();
+        var checker = tc.TypeChecker.init(ctx, &e, ar, declar.info().*, &cache);
         try tc.assertDefEq(&checker, declar.info().ty, expected_quot.info().ty);
     } else if (declar.info().name == TcCtx.str2(ctx, "Quot", "mk")) {
         const e = ctx.export_file.newEnv(EnvLimit{ .by_name = quot_mk_name });
-        var checker = tc.TypeChecker.init(ctx, &e, ar, declar.info().*);
+        var cache: tc.TcCache = .empty;
+        defer cache.deinit();
+        var checker = tc.TypeChecker.init(ctx, &e, ar, declar.info().*, &cache);
         try tc.assertDefEq(&checker, declar.info().ty, expected_quot_mk.info().ty);
     } else if (declar.info().name == TcCtx.str2(ctx, "Quot", "lift")) {
         try checkEq(ctx, ar, declar);
@@ -148,7 +156,9 @@ pub fn checkQuot(ctx: *TcCtx, ar: *Arena, declar: *const Declar) tc.Reject!void 
             },
         } };
         const e = ctx.export_file.newEnv(EnvLimit{ .by_name = declar.info().name });
-        var checker = tc.TypeChecker.init(ctx, &e, ar, declar.info().*);
+        var cache: tc.TcCache = .empty;
+        defer cache.deinit();
+        var checker = tc.TypeChecker.init(ctx, &e, ar, declar.info().*, &cache);
         try tc.assertDefEq(&checker, declar.info().ty, expected_quot_lift.info().ty);
         return;
     } else if (declar.info().name == TcCtx.str2(ctx, "Quot", "ind")) {
@@ -172,7 +182,9 @@ pub fn checkQuot(ctx: *TcCtx, ar: *Arena, declar: *const Declar) tc.Reject!void 
         } };
 
         const e = ctx.export_file.newEnv(EnvLimit{ .by_name = declar.info().name });
-        var checker = tc.TypeChecker.init(ctx, &e, ar, declar.info().*);
+        var cache: tc.TcCache = .empty;
+        defer cache.deinit();
+        var checker = tc.TypeChecker.init(ctx, &e, ar, declar.info().*, &cache);
         try tc.assertDefEq(&checker, declar.info().ty, expected_quot_ind.info().ty);
         return;
     } else {

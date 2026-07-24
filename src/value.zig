@@ -19,6 +19,10 @@ pub const S = *const Spine;
 pub const Closure = struct {
     env: E,
     body: ExprPtr,
+    kind: Kind = .eval,
+    ctx: C = &Ctx.nil,
+
+    pub const Kind = enum { eval, infer };
 };
 
 pub const NameLevels = struct { name: NamePtr, levels: LevelsPtr };
@@ -106,12 +110,33 @@ pub const Value = union(enum) {
     },
 };
 
+pub const LevelSub = struct {
+    ks: LevelsPtr,
+    vs: LevelsPtr,
+};
+
+pub const Frame = struct {
+    hash: u64,
+    mask: u64,
+    slots: []const V,
+    lsub: ?*const LevelSub,
+
+    pub fn getHash(self: *const Frame) u64 {
+        return self.hash;
+    }
+};
+
 pub const Env = struct {
     v: V,
     parent: E,
+    frame: ?*const Frame,
+    lsub: ?*const LevelSub,
     hash: u64,
+    len: u32,
+    prune_mask: u64,
+    prune_r: E,
 
-    pub const nil: Env = .{ .v = undefined, .parent = undefined, .hash = 0 };
+    pub const nil: Env = .{ .v = undefined, .parent = undefined, .frame = null, .lsub = null, .hash = 0, .len = 0, .prune_mask = 0, .prune_r = undefined };
 
     pub fn getHash(self: *const Env) u64 {
         return self.hash;
@@ -120,12 +145,16 @@ pub const Env = struct {
     pub fn lookup(self: *const Env, idx_in: u16) ?V {
         var idx = idx_in;
         var cur = self;
-        while (cur != &nil) {
+        while (cur.frame == null) {
+            if (cur == &nil) return null;
             if (idx == 0) return cur.v;
             idx -= 1;
             cur = cur.parent;
         }
-        return null;
+        const f = cur.frame.?;
+        if (idx >= 64 or (f.mask >> @intCast(idx)) & 1 == 0) return null;
+        const below = f.mask & ((@as(u64, 1) << @intCast(idx)) - 1);
+        return f.slots[@popCount(below)];
     }
 };
 
@@ -194,7 +223,7 @@ pub fn envExtend(arena: *Arena, parent: E, v: V) E {
     const parent_hash = parent.getHash();
     const hash = parent_hash *% 0x9E3779B97F4A7C15 +% v_hash;
     const e = arena.create(Env);
-    e.* = .{ .v = v, .parent = parent, .hash = hash };
+    e.* = .{ .v = v, .parent = parent, .frame = null, .lsub = parent.lsub, .hash = hash, .len = parent.len + 1, .prune_mask = 0, .prune_r = undefined };
     return e;
 }
 
