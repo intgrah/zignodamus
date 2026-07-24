@@ -134,13 +134,14 @@ fn checkInductiveDeclarChecked(
         break :blk collectUnmodifiedMutuals(&tcr, ind);
     };
 
+    var spec_aux_ext = DeclarMap.empty;
     var st = blk: {
-        var e = self.newEnv(env_limit);
+        var e = env.Env.initWithTempExt(&self.declars, &spec_aux_ext, env_limit);
         var cache: tc.TcCache = .empty;
         defer cache.deinit();
         var tcr = TypeChecker.init(&ctx, &e, &ar, null, &cache);
         defer tcr.deinit();
-        break :blk try specializeNested(&tcr, ind, cloneHeaders(&tcr, unmodified_tys_ctors));
+        break :blk try specializeNested(&tcr, ind, cloneHeaders(&tcr, unmodified_tys_ctors), &spec_aux_ext);
     };
 
     {
@@ -153,7 +154,7 @@ fn checkInductiveDeclarChecked(
     }
 
     const ind_ty_ext1 = mkIndTysEnvExt(&ctx, &st);
-    var occ = IndOccurs{ .names = st.ind_names.items };
+    var occ = IndOccurs{ .st = &st };
     defer occ.deinit();
 
     {
@@ -206,7 +207,7 @@ fn checkInductiveDeclarChecked(
 }
 
 pub fn mkIndTysEnvExt(ctx: *TcCtx, st: *const InductiveCheckState) DeclarMap {
-    const is_nested_ = st.nested_to_unspecialized_ty_nofvars.count() != 0;
+    const is_nested_ = isNested(st);
     var all_ind_names = std.ArrayList(NamePtr).empty;
     for (st.all_inductives_incl_specialized.items) |x| {
         all_ind_names.append(ctx.bump, x.name) catch util.oom();
@@ -257,13 +258,12 @@ pub fn mkCtorsEnvExt(ctx: *TcCtx, nest_st: *const InductiveCheckState, env_ext_i
 }
 
 pub const InductiveCheckState = struct {
-    nested_to_unspecialized_ty_wfvars: FxIndexMap(NamePtr, ExprPtr),
-    nested_to_unspecialized_ty_nofvars: FxIndexMap(NamePtr, ExprPtr),
+    spec_key_to_aux: FxIndexMap(ExprPtr, NamePtr),
+    aux_to_container: FxIndexMap(NamePtr, V),
     uparams: LevelsPtr,
     num_params: u16,
     all_inductives_incl_specialized: std.ArrayList(IndTyHeader),
     next_ngen_idx: u64,
-    local_params: std.ArrayList(ExprPtr),
     g: Walk,
     params: std.ArrayList(VBinder),
     param_ty_exprs: std.ArrayList(ExprPtr),
@@ -285,16 +285,14 @@ fn newState(
     info_uparams: LevelsPtr,
     num_params: u16,
     new_tys: std.ArrayList(IndTyHeader),
-    local_params: std.ArrayList(ExprPtr),
 ) InductiveCheckState {
     return InductiveCheckState{
-        .nested_to_unspecialized_ty_wfvars = swiss_map.FxIndexMap(NamePtr, ExprPtr).empty,
-        .nested_to_unspecialized_ty_nofvars = swiss_map.FxIndexMap(NamePtr, ExprPtr).empty,
+        .spec_key_to_aux = swiss_map.FxIndexMap(ExprPtr, NamePtr).empty,
+        .aux_to_container = swiss_map.FxIndexMap(NamePtr, V).empty,
         .uparams = info_uparams,
         .num_params = num_params,
         .all_inductives_incl_specialized = new_tys,
         .next_ngen_idx = 1,
-        .local_params = local_params,
         .g = Walk.empty,
         .params = std.ArrayList(VBinder).empty,
         .param_ty_exprs = std.ArrayList(ExprPtr).empty,
@@ -314,7 +312,7 @@ fn newState(
 }
 
 const IndOccurs = struct {
-    names: []const NamePtr,
+    st: *const InductiveCheckState,
     memo: swiss_map.FxHashMap(usize, bool) = .empty,
 
     fn deinit(self: *IndOccurs) void {
@@ -322,8 +320,8 @@ const IndOccurs = struct {
     }
 
     fn matches(self: *IndOccurs, n: NamePtr) bool {
-        for (self.names) |m| {
-            if (m == n) return true;
+        for (self.st.all_inductives_incl_specialized.items) |h| {
+            if (h.name == n) return true;
         }
         return false;
     }
@@ -352,10 +350,6 @@ const IndOccurs = struct {
     fn inHead(self: *IndOccurs, tcr: *TypeChecker, depth: u32, head: value.RigidHead) bool {
         switch (head) {
             .b_var => |b| return self.inValue(tcr, depth, b.ty),
-            .local => |ex| switch (ex.asRef().kind) {
-                .local => |lo| return self.inExpr(tcr, lo.binder_type),
-                else => @panic("ind occurs: local head without local expr"),
-            },
             .axiom, .ctor, .recursor, .quot_const, .inductive => |nl| return self.matches(nl.name),
         }
     }
@@ -392,7 +386,7 @@ const IndOccurs = struct {
 };
 
 fn isNested(self: *const InductiveCheckState) bool {
-    return self.nested_to_unspecialized_ty_nofvars.count() != 0;
+    return self.aux_to_container.count() != 0;
 }
 
 pub const IndTyHeader = struct {
@@ -420,81 +414,204 @@ fn cloneHeaders(self: *TypeChecker, hs: std.ArrayList(IndTyHeader)) std.ArrayLis
     return out;
 }
 
+const SpecCtx = struct {
+    st: *InductiveCheckState,
+    occ: *IndOccurs,
+    aux_ext: *DeclarMap,
+    params: []const VBinder,
+    param_ty_exprs: []const ExprPtr,
+    memo: eval.QuoteMemo = .empty,
+
+    fn deinit(self: *SpecCtx) void {
+        self.memo.deinit(util.smp_allocator);
+    }
+
+    pub fn hook(hctx: *SpecCtx, self: *TypeChecker, depth: u32, v: V) tc.Reject!?ExprPtr {
+        if (v.* != .rigid or v.rigid.head != .inductive) return null;
+        return specTryNested(self, hctx, depth, v);
+    }
+};
+
 fn specializeNested(
     self: *TypeChecker,
     t_from_file: *const InductiveData,
     unmodified_tys_ctors: std.ArrayList(IndTyHeader),
+    aux_ext: *DeclarMap,
 ) tc.Reject!InductiveCheckState {
-    const lp = try getLocalParams(self, unmodified_tys_ctors.items[0].ty, t_from_file.num_params);
-    const local_params = lp[0];
+    var st = newState(t_from_file.info.uparams, t_from_file.num_params, unmodified_tys_ctors);
+    var occ = IndOccurs{ .st = &st };
+    defer occ.deinit();
 
-    var st = newState(
-        t_from_file.info.uparams,
-        u16TryFrom(local_params.items.len),
-        unmodified_tys_ctors,
-        local_params,
-    );
-    try specializeNestedAux(self, &st);
+    var w = Walk.empty;
+    var params = std.ArrayList(VBinder).empty;
+    var param_ty_exprs = std.ArrayList(ExprPtr).empty;
+    var cur0 = eval.eval(self, 0, value.envEmpty(), st.all_inductives_incl_specialized.items[0].ty);
+    var j: u16 = 0;
+    while (j < st.num_params) : (j += 1) {
+        const f = eval.forceAll(self, w.depth, cur0);
+        if (f.* != .pi) return tc.reject("exhausted telescope early", .{});
+        const dom = f.pi.domain;
+        param_ty_exprs.append(self.ctx.bump, eval.quote(self, w.depth, dom)) catch util.oom();
+        const pushed, const fresh = walkFresh(self, w, dom);
+        cur0 = eval.applyClosure(self, w.depth + 1, &f.pi.body, fresh, dom);
+        params.append(self.ctx.bump, VBinder{ .name = f.pi.binder_name, .style = f.pi.binder_style, .v = fresh }) catch util.oom();
+        w = pushed;
+    }
 
-    for (st.all_inductives_incl_specialized.items) |ind| {
-        util.assert(!ind.ty.hasFvars());
-        for (ind.ctors.items) |c| {
-            util.assert(!c.ty.hasFvars());
+    var sp = SpecCtx{
+        .st = &st,
+        .occ = &occ,
+        .aux_ext = aux_ext,
+        .params = params.items,
+        .param_ty_exprs = param_ty_exprs.items,
+    };
+    defer sp.deinit();
+
+    var i: usize = 0;
+    while (i < st.all_inductives_incl_specialized.items.len) : (i += 1) {
+        var new_ctors = std.ArrayList(CtorHeader).empty;
+        for (st.all_inductives_incl_specialized.items[i].ctors.items) |ctor| {
+            var cur = eval.eval(self, 0, value.envEmpty(), ctor.ty);
+            for (params.items) |pb| {
+                const f = eval.forceAll(self, w.depth, cur);
+                if (f.* != .pi) return tc.reject("exhausted telescope early", .{});
+                cur = eval.applyClosure(self, w.depth, &f.pi.body, pb.v, f.pi.domain);
+            }
+            const replaced = try eval.quoteWith(self, &sp, w.depth, cur);
+            const new_ty = piFold(self, params.items, param_ty_exprs.items, replaced);
+            new_ctors.append(self.ctx.bump, CtorHeader{ .name = ctor.name, .ty = new_ty }) catch util.oom();
         }
+        st.all_inductives_incl_specialized.items[i].ctors = new_ctors;
     }
     return st;
 }
 
-fn specializeNestedAux(self: *TypeChecker, st: *InductiveCheckState) tc.Reject!void {
-    var i: usize = 0;
-    while (i < st.all_inductives_incl_specialized.items.len) {
-        var new_ctors_for_i = std.ArrayList(CtorHeader).empty;
-        const cloned = cloneHeader(self.ctx, st.all_inductives_incl_specialized.items[i]);
-        for (cloned.ctors.items) |adjusted_ctor| {
-            const glp = try getLocalParams(self, adjusted_ctor.ty, u16TryFrom(st.local_params.items.len));
-            const ctor_local_params = glp[0];
-            const ctor_type_instd = glp[1];
-            const replaced_ctor_wo_params = try replaceAllNested(self, ctor_type_instd, st, &ctor_local_params);
-            const replaced_ctor_w_params = expr.abstrPis(self.ctx, ctor_local_params.items, replaced_ctor_wo_params);
-            util.assert(!replaced_ctor_w_params.hasFvars());
-            new_ctors_for_i.append(self.ctx.bump, CtorHeader{ .name = adjusted_ctor.name, .ty = replaced_ctor_w_params }) catch util.oom();
-        }
-        if (i < st.all_inductives_incl_specialized.items.len) {
-            st.all_inductives_incl_specialized.items[i].ctors = new_ctors_for_i;
-        } else {
-            return tc.reject("inductive type is missing", .{});
-        }
-        i += 1;
+fn indAppValue(self: *TypeChecker, depth: u32, ind_name: NamePtr, levels: LevelsPtr, args: []const V) V {
+    var v = value.mkRigidHeadWithEmpty(
+        self.arena,
+        .{ .inductive = .{ .name = ind_name, .levels = levels } },
+        value.spineEmpty(),
+    );
+    for (args) |a| {
+        v = eval.apply(self, depth, v, a);
     }
-
-    st.nested_to_unspecialized_ty_nofvars = blk: {
-        var out = swiss_map.FxIndexMap(NamePtr, ExprPtr).empty;
-        var it = st.nested_to_unspecialized_ty_wfvars.iterator();
-        while (it.next()) |entry| {
-            const e = expr.abstr(self.ctx, entry.value_ptr.*, st.local_params.items);
-            out.put(self.ctx.bump, entry.key_ptr.*, e) catch util.oom();
-        }
-        break :blk out;
-    };
+    return v;
 }
 
-fn getLocalParams(self: *TypeChecker, e_in: ExprPtr, num_params: u16) tc.Reject!struct { std.ArrayList(ExprPtr), ExprPtr } {
-    var e = e_in;
-    var param_locals = std.ArrayList(ExprPtr).empty;
-    param_locals.ensureTotalCapacity(self.ctx.bump, num_params) catch util.oom();
-    var i: u16 = 0;
-    while (i < num_params) : (i += 1) {
-        switch (e.asRef().kind) {
-            .pi => |pi| {
-                const local_ = TcCtx.mkUnique(self.ctx, pi.binder_name, pi.binder_style, pi.binder_type);
-                e = expr.inst(self.ctx, pi.body, &.{local_});
-                e = tc.whnf(self, e);
-                param_locals.append(self.ctx.bump, local_) catch util.oom();
-            },
-            else => return tc.reject("exhausted telescope early", .{}),
+fn specTryNested(self: *TypeChecker, sp: *SpecCtx, depth: u32, v: V) tc.Reject!?ExprPtr {
+    const head = v.rigid.head.inductive;
+    const container = Env.getInductive(self.env, head.name) orelse return null;
+    const k: usize = container.num_params;
+    if (v.rigid.spine.length < k) return null;
+    const args = eval.spineApps(self, depth, v.rigid.spine) orelse return null;
+    var mentions = false;
+    for (args[0..k]) |a| {
+        if (sp.occ.inValue(self, depth, a)) {
+            mentions = true;
+            break;
         }
     }
-    return .{ param_locals, e };
+    if (!mentions) return null;
+    for (args[0..k]) |a| {
+        if (occursInnerBvar(self, sp, depth, a)) {
+            return tc.reject("nested types cannot contain loose bvars", .{});
+        }
+    }
+    const key = specKey(self, sp, head.name, head.levels, args[0..k]);
+    if (sp.st.spec_key_to_aux.get(key)) |aux_name| {
+        return specEmit(self, sp, depth, aux_name, args[k..]);
+    }
+    var result: ?ExprPtr = null;
+    const nested_pfx = TcCtx.str1(self.ctx, "_nested");
+    for (container.all_ind_names) |cont_name| {
+        const cont = Env.getInductive(self.env, cont_name) orelse return null;
+        const aux_name = mkUniqueName(self, name_mod.concatName(self.ctx, nested_pfx, cont_name), sp.st);
+        const capp = indAppValue(self, sp.st.num_params, cont_name, head.levels, args[0..k]);
+        const jkey = specKey(self, sp, cont_name, head.levels, args[0..k]);
+        sp.st.spec_key_to_aux.put(self.ctx.bump, jkey, aux_name) catch util.oom();
+        sp.st.aux_to_container.put(self.ctx.bump, aux_name, capp) catch util.oom();
+        const aux_ty = try specInstantiate(self, sp, cont.info.ty, cont.info.uparams, head.levels, args[0..k]);
+        var aux_ctors = std.ArrayList(CtorHeader).empty;
+        var aux_ctor_names = std.ArrayList(NamePtr).empty;
+        for (cont.all_ctor_names) |cn| {
+            const cd = Env.getConstructor(self.env, cn) orelse return null;
+            const aux_ctor_name = name_mod.replacePfx(self.ctx, cn, cont_name, aux_name);
+            const aux_ctor_ty = try specInstantiate(self, sp, cd.info.ty, cd.info.uparams, head.levels, args[0..k]);
+            aux_ctors.append(self.ctx.bump, CtorHeader{ .name = aux_ctor_name, .ty = aux_ctor_ty }) catch util.oom();
+            aux_ctor_names.append(self.ctx.bump, aux_ctor_name) catch util.oom();
+        }
+        sp.st.all_inductives_incl_specialized.append(self.ctx.bump, IndTyHeader{
+            .name = aux_name,
+            .ty = aux_ty,
+            .ctors = aux_ctors,
+        }) catch util.oom();
+        const self_names = self.ctx.bump.alloc(NamePtr, 1) catch util.oom();
+        self_names[0] = aux_name;
+        sp.aux_ext.put(self.ctx.bump, aux_name, Declar{ .inductive = InductiveData{
+            .info = DeclarInfo{ .name = aux_name, .uparams = sp.st.uparams, .ty = aux_ty },
+            .is_nested = true,
+            .is_recursive = false,
+            .num_params = sp.st.num_params,
+            .num_indices = cont.num_indices,
+            .all_ind_names = self_names,
+            .all_ctor_names = aux_ctor_names.items,
+        } }) catch util.oom();
+        if (cont_name == head.name) {
+            result = specEmit(self, sp, depth, aux_name, args[k..]);
+        }
+    }
+    return result;
+}
+
+fn occursInnerBvar(self: *TypeChecker, sp: *SpecCtx, depth: u32, arg: V) bool {
+    const p: u32 = sp.st.num_params;
+    const q = eval.quote(self, depth, arg);
+    const nlb: u32 = q.numLooseBvars();
+    if (nlb == 0 or depth == p) return false;
+    const inner: u32 = depth - p;
+    if (nlb <= 64) {
+        const mask = q.asRef().fv_mask;
+        const low: u64 = if (inner >= 64) std.math.maxInt(u64) else (@as(u64, 1) << @intCast(inner)) - 1;
+        return mask & low != 0;
+    }
+    var idx: u16 = 0;
+    while (idx < inner and idx < nlb) : (idx += 1) {
+        if (expr.hasLooseBvar(q, idx)) return true;
+    }
+    return false;
+}
+
+fn specKey(self: *TypeChecker, sp: *SpecCtx, ind_name: NamePtr, levels: LevelsPtr, args: []const V) ExprPtr {
+    return eval.quote(self, sp.st.num_params, indAppValue(self, sp.st.num_params, ind_name, levels, args));
+}
+
+fn specEmit(self: *TypeChecker, sp: *SpecCtx, depth: u32, aux_name: NamePtr, rest: []const V) ExprPtr {
+    var e = TcCtx.mkConst(self.ctx, aux_name, sp.st.uparams);
+    for (sp.params) |pb| {
+        e = TcCtx.mkApp(self.ctx, e, TcCtx.mkVar(self.ctx, @intCast(depth - 1 - pb.v.rigid.head.b_var.lvl)));
+    }
+    for (rest) |a| {
+        e = TcCtx.mkApp(self.ctx, e, eval.quote(self, depth, a));
+    }
+    return e;
+}
+
+fn specInstantiate(
+    self: *TypeChecker,
+    sp: *SpecCtx,
+    ty: ExprPtr,
+    uparams: LevelsPtr,
+    levels: LevelsPtr,
+    args: []const V,
+) tc.Reject!ExprPtr {
+    const p: u32 = sp.st.num_params;
+    var cur = eval.evalInst(self, ty, uparams, levels);
+    for (args) |a| {
+        const f = eval.forceAll(self, p, cur);
+        if (f.* != .pi) return tc.reject("exhausted telescope early", .{});
+        cur = eval.applyClosure(self, p, &f.pi.body, a, f.pi.domain);
+    }
+    return piFold(self, sp.params, sp.param_ty_exprs, eval.quote(self, p, cur));
 }
 
 fn applyParams(self: *TypeChecker, st: *const InductiveCheckState, depth: u32, ty_v: V) tc.Reject!V {
@@ -569,50 +686,6 @@ fn checkInductiveSpecs(self: *TypeChecker, st: *InductiveCheckState) tc.Reject!v
     }
 }
 
-fn isNestedIndApp(self: *TypeChecker, st: *const InductiveCheckState, e: ExprPtr) tc.Reject!?InductiveData {
-    if (e.asRef().kind != .app) {
-        return null;
-    }
-    const unfolded = expr.unfoldConstApps(self.ctx.bump, e) orelse return null;
-    const name_ = unfolded.name;
-    const args = unfolded.args;
-    const ind_ty_declar = Env.getInductive(self.env, name_) orelse return null;
-    const num_params = ind_ty_declar.num_params;
-    if (@as(usize, num_params) > args.items.len) {
-        return null;
-    }
-    var loose_bvars = false;
-    var is_nested_ = false;
-    var i: usize = 0;
-    while (i < @as(usize, num_params)) : (i += 1) {
-        const this_param = args.items[i];
-        if (this_param.numLooseBvars() != 0) {
-            loose_bvars = true;
-        }
-        const FindCtx = struct {
-            st: *const InductiveCheckState,
-            ctx: *TcCtx,
-            fn pred(fc: *@This(), nptr: NamePtr) bool {
-                for (fc.st.all_inductives_incl_specialized.items) |new_ty| {
-                    if (new_ty.name == nptr) return true;
-                }
-                return false;
-            }
-        };
-        var fc = FindCtx{ .st = st, .ctx = self.ctx };
-        if (expr.findConst(self.ctx, this_param, &fc, FindCtx.pred)) {
-            is_nested_ = true;
-        }
-    }
-    if (!is_nested_) {
-        return null;
-    }
-    if (loose_bvars) {
-        return tc.reject("nested types cannot contain loose bvars", .{});
-    }
-    return ind_ty_declar.*;
-}
-
 fn headerOfCtor(t: *const ConstructorData) CtorHeader {
     return CtorHeader{ .name = t.info.name, .ty = t.info.ty };
 }
@@ -644,128 +717,6 @@ fn mkUniqueName(self: *TypeChecker, n: NamePtr, st: *InductiveCheckState) NamePt
         }
     }
     @panic("Unable to generate unique name, u64 exhausted");
-}
-
-fn replaceIfNested(
-    self: *TypeChecker,
-    e: ExprPtr,
-    st: *InductiveCheckState,
-    outgoing_param_locals: []const ExprPtr,
-) tc.Reject!?ExprPtr {
-    const nested_container_ty = (try isNestedIndApp(self, st, e)) orelse return null;
-    const unfolded = expr.unfoldConstApps(self.ctx.bump, e).?;
-    const f = unfolded.fun;
-    const i_name = unfolded.name;
-    const i_levels = unfolded.levels;
-    const args = unfolded.args;
-    util.assert(@as(usize, nested_container_ty.num_params) <= args.items.len);
-    const i_as = expr.foldlApps(self.ctx, f, args.items[0..@as(usize, nested_container_ty.num_params)]);
-    const i_params = expr.replaceParams(self.ctx, i_as, st.local_params.items, outgoing_param_locals);
-
-    var found: ?NamePtr = null;
-    {
-        var it = st.nested_to_unspecialized_ty_wfvars.iterator();
-        while (it.next()) |entry| {
-            if (entry.value_ptr.* == i_params) {
-                found = entry.key_ptr.*;
-                break;
-            }
-        }
-    }
-    if (found) |aux_i_name| {
-        var f2 = TcCtx.mkConst(self.ctx, aux_i_name, st.uparams);
-        f2 = expr.foldlApps(self.ctx, f2, outgoing_param_locals);
-        f2 = expr.foldlApps(self.ctx, f2, args.items[@as(usize, nested_container_ty.num_params)..args.items.len]);
-        return f2;
-    } else {
-        var result: ?ExprPtr = null;
-        for (nested_container_ty.all_ind_names) |nested_container_name| {
-            const container = Env.getInductive(self.env, nested_container_name) orelse return null;
-            const container_ty_info = container.info;
-            const all_nested_container_ctor_names = container.all_ctor_names;
-            const js = blk: {
-                const base_const = TcCtx.mkConst(self.ctx, nested_container_name, i_levels);
-                break :blk expr.foldlApps(self.ctx, base_const, args.items[0..@as(usize, nested_container_ty.num_params)]);
-            };
-
-            const aux_nested_container_name = blk: {
-                const nested_pfx = TcCtx.str1(self.ctx, "_nested");
-                const base = name_mod.concatName(self.ctx, nested_pfx, nested_container_name);
-                break :blk mkUniqueName(self, base, st);
-            };
-            const nested_container_aux_type = blk: {
-                const base = expr.substExprLevels(self.ctx, container_ty_info.ty, container_ty_info.uparams, i_levels);
-                const instd = expr.instForallParams(self.ctx, base, @as(usize, nested_container_ty.num_params), args.items);
-                const out = expr.abstrPis(self.ctx, outgoing_param_locals, instd);
-                break :blk out;
-            };
-            const jsprime = expr.replaceParams(self.ctx, js, st.local_params.items, outgoing_param_locals);
-            st.nested_to_unspecialized_ty_wfvars.put(self.ctx.bump, aux_nested_container_name, jsprime) catch util.oom();
-            if (nested_container_name == i_name) {
-                var f2 = TcCtx.mkConst(self.ctx, aux_nested_container_name, st.uparams);
-                f2 = expr.foldlApps(self.ctx, f2, outgoing_param_locals);
-                const args2 = args.items[@as(usize, nested_container_ty.num_params)..args.items.len];
-                f2 = expr.foldlApps(self.ctx, f2, args2);
-                result = f2;
-            }
-            var auxj_ctors = std.ArrayList(CtorHeader).empty;
-            for (all_nested_container_ctor_names) |j_ctor_name| {
-                const j_ctor = Env.getConstructor(self.env, j_ctor_name) orelse return null;
-                const j_ctor_info = j_ctor.info;
-                const auxj_ctor_name = name_mod.replacePfx(self.ctx, j_ctor_name, nested_container_name, aux_nested_container_name);
-                var auxj_ctor_type = expr.substExprLevels(self.ctx, j_ctor_info.ty, j_ctor_info.uparams, i_levels);
-                auxj_ctor_type = expr.instForallParams(self.ctx, auxj_ctor_type, @as(usize, nested_container_ty.num_params), args.items);
-                auxj_ctor_type = expr.abstrPis(self.ctx, outgoing_param_locals, auxj_ctor_type);
-                auxj_ctors.append(self.ctx.bump, CtorHeader{ .name = auxj_ctor_name, .ty = auxj_ctor_type }) catch util.oom();
-            }
-            st.all_inductives_incl_specialized.append(self.ctx.bump, IndTyHeader{
-                .name = aux_nested_container_name,
-                .ty = nested_container_aux_type,
-                .ctors = auxj_ctors,
-            }) catch util.oom();
-        }
-        return result;
-    }
-}
-
-fn replaceAllNested(
-    self: *TypeChecker,
-    e: ExprPtr,
-    st: *InductiveCheckState,
-    outgoing_params: *const std.ArrayList(ExprPtr),
-) tc.Reject!ExprPtr {
-    if (try replaceIfNested(self, e, st, outgoing_params.items)) |eprime| {
-        return eprime;
-    } else {
-        switch (e.asRef().kind) {
-            .@"var", .sort, .@"const", .local, .nat_lit, .string_lit => return e,
-            .pi => |pi| {
-                const binder_type = try replaceAllNested(self, pi.binder_type, st, outgoing_params);
-                const body = try replaceAllNested(self, pi.body, st, outgoing_params);
-                return TcCtx.mkPi(self.ctx, pi.binder_name, pi.binder_style, binder_type, body);
-            },
-            .lambda => |la| {
-                const binder_type = try replaceAllNested(self, la.binder_type, st, outgoing_params);
-                const body = try replaceAllNested(self, la.body, st, outgoing_params);
-                return TcCtx.mkLambda(self.ctx, la.binder_name, la.binder_style, binder_type, body);
-            },
-            .let => |le| {
-                const binder_type = try replaceAllNested(self, le.data.binder_type, st, outgoing_params);
-                const val = try replaceAllNested(self, le.data.val, st, outgoing_params);
-                const body = try replaceAllNested(self, le.data.body, st, outgoing_params);
-                return TcCtx.mkLet(self.ctx, le.data.binder_name, binder_type, val, body, le.data.nondep);
-            },
-            .app => |ap| {
-                const fun = try replaceAllNested(self, ap.fun, st, outgoing_params);
-                const arg = try replaceAllNested(self, ap.arg, st, outgoing_params);
-                return TcCtx.mkApp(self.ctx, fun, arg);
-            },
-            .proj => |pr| {
-                const structure = try replaceAllNested(self, pr.structure, st, outgoing_params);
-                return TcCtx.mkProj(self.ctx, pr.ty_name, pr.idx, structure);
-            },
-        }
-    }
 }
 
 const IndApp = struct {
@@ -1404,106 +1355,66 @@ fn getNestedIfAuxCtor(
     self: *TypeChecker,
     st: *const InductiveCheckState,
     c: NamePtr,
-) ?struct { ExprPtr, NamePtr } {
+) ?struct { V, NamePtr } {
     const ctor = Env.getConstructor(self.env, c) orelse return null;
-    const inductive_name = ctor.inductive_name;
-    const unspecialized_ty = st.nested_to_unspecialized_ty_nofvars.get(inductive_name) orelse return null;
-    return .{ unspecialized_ty, inductive_name };
+    const container = st.aux_to_container.get(ctor.inductive_name) orelse return null;
+    return .{ container, ctor.inductive_name };
 }
 
 fn restoreCtorName(self: *TypeChecker, st: *const InductiveCheckState, ctor_name: NamePtr) NamePtr {
     const got = getNestedIfAuxCtor(self, st, ctor_name).?;
-    const unspecialized_ty = got[0];
-    const base_ind_name = got[1];
-    const unspecialized_f = expr.unfoldAppsFun(unspecialized_ty);
-    const tci = expr.tryConstInfo(unspecialized_f).?;
-    const unspecialized_ty_name = tci[0];
-    return name_mod.replacePfx(self.ctx, ctor_name, base_ind_name, unspecialized_ty_name);
+    const container, const aux_ind_name = got;
+    return name_mod.replacePfx(self.ctx, ctor_name, aux_ind_name, container.rigid.head.inductive.name);
 }
 
-fn restoreReplace(
-    self: *TypeChecker,
-    e: ExprPtr,
-    local_params: []const ExprPtr,
+const RestoreCtx = struct {
     st: *const InductiveCheckState,
-    specialized_rec_names_to_unspecialized_rec_names: *const FxIndexMap(NamePtr, NamePtr),
-) tc.Reject!ExprPtr {
-    if (try replaceF(self, e, local_params, st, specialized_rec_names_to_unspecialized_rec_names)) |out| {
-        return out;
-    } else {
-        switch (e.asRef().kind) {
-            .@"var", .sort, .@"const", .local, .string_lit, .nat_lit => return e,
-            .lambda => |la| {
-                const binder_type = try restoreReplace(self, la.binder_type, local_params, st, specialized_rec_names_to_unspecialized_rec_names);
-                const body = try restoreReplace(self, la.body, local_params, st, specialized_rec_names_to_unspecialized_rec_names);
-                return TcCtx.mkLambda(self.ctx, la.binder_name, la.binder_style, binder_type, body);
+    rec_map: *const FxIndexMap(NamePtr, NamePtr),
+    memo: eval.QuoteMemo = .empty,
+
+    fn deinit(self: *RestoreCtx) void {
+        self.memo.deinit(util.smp_allocator);
+    }
+
+    pub fn hook(hctx: *RestoreCtx, self: *TypeChecker, depth: u32, v: V) tc.Reject!?ExprPtr {
+        if (v.* != .rigid) return null;
+        const st = hctx.st;
+        switch (v.rigid.head) {
+            .recursor => |nl| {
+                const renamed = hctx.rec_map.get(nl.name) orelse return null;
+                return try eval.quoteSpineWith(self, hctx, depth, TcCtx.mkConst(self.ctx, renamed, nl.levels), v.rigid.spine);
             },
-            .pi => |pi| {
-                const binder_type = try restoreReplace(self, pi.binder_type, local_params, st, specialized_rec_names_to_unspecialized_rec_names);
-                const body = try restoreReplace(self, pi.body, local_params, st, specialized_rec_names_to_unspecialized_rec_names);
-                return TcCtx.mkPi(self.ctx, pi.binder_name, pi.binder_style, binder_type, body);
+            .inductive => |nl| {
+                const container = st.aux_to_container.get(nl.name) orelse return null;
+                const args = eval.spineApps(self, depth, v.rigid.spine) orelse return null;
+                util.assert(args.len >= st.num_params);
+                var e = eval.quote(self, depth, container);
+                for (args[st.num_params..]) |a| {
+                    e = TcCtx.mkApp(self.ctx, e, try eval.quoteWith(self, hctx, depth, a));
+                }
+                return e;
             },
-            .let => |le| {
-                const binder_type = try restoreReplace(self, le.data.binder_type, local_params, st, specialized_rec_names_to_unspecialized_rec_names);
-                const val = try restoreReplace(self, le.data.val, local_params, st, specialized_rec_names_to_unspecialized_rec_names);
-                const body = try restoreReplace(self, le.data.body, local_params, st, specialized_rec_names_to_unspecialized_rec_names);
-                return TcCtx.mkLet(self.ctx, le.data.binder_name, binder_type, val, body, le.data.nondep);
+            .ctor => |nl| {
+                const got = getNestedIfAuxCtor(self, st, nl.name) orelse return null;
+                const container, const aux_ind_name = got;
+                const args = eval.spineApps(self, depth, v.rigid.spine) orelse return null;
+                util.assert(args.len >= st.num_params);
+                const cont_head = container.rigid.head.inductive;
+                const renamed = name_mod.replacePfx(self.ctx, nl.name, aux_ind_name, cont_head.name);
+                var e = TcCtx.mkConst(self.ctx, renamed, cont_head.levels);
+                const cont_args = eval.spineApps(self, depth, container.rigid.spine).?;
+                for (cont_args) |ca| {
+                    e = TcCtx.mkApp(self.ctx, e, eval.quote(self, depth, ca));
+                }
+                for (args[st.num_params..]) |a| {
+                    e = TcCtx.mkApp(self.ctx, e, try eval.quoteWith(self, hctx, depth, a));
+                }
+                return e;
             },
-            .proj => |pr| {
-                const structure = try restoreReplace(self, pr.structure, local_params, st, specialized_rec_names_to_unspecialized_rec_names);
-                return TcCtx.mkProj(self.ctx, pr.ty_name, pr.idx, structure);
-            },
-            .app => |ap| {
-                const fun = try restoreReplace(self, ap.fun, local_params, st, specialized_rec_names_to_unspecialized_rec_names);
-                const arg = try restoreReplace(self, ap.arg, local_params, st, specialized_rec_names_to_unspecialized_rec_names);
-                return TcCtx.mkApp(self.ctx, fun, arg);
-            },
+            else => return null,
         }
     }
-}
-
-fn replaceF(
-    self: *TypeChecker,
-    e: ExprPtr,
-    local_params: []const ExprPtr,
-    st: *const InductiveCheckState,
-    specialized_rec_names_to_unspecialized_rec_names: *const FxIndexMap(NamePtr, NamePtr),
-) tc.Reject!?ExprPtr {
-    if (e.asRef().kind == .@"const") {
-        const co = e.asRef().kind.@"const";
-        if (specialized_rec_names_to_unspecialized_rec_names.get(co.name)) |rec_name| {
-            return TcCtx.mkConst(self.ctx, rec_name, co.levels);
-        }
-    }
-    const unfolded = expr.unfoldConstApps(self.ctx.bump, e) orelse return null;
-    const c_name = unfolded.name;
-    const e_args = unfolded.args;
-    if (st.nested_to_unspecialized_ty_nofvars.get(c_name)) |nested| {
-        std.debug.assert(e_args.items.len >= @as(usize, st.num_params));
-        const inner = expr.inst(self.ctx, nested, local_params);
-        const outer = expr.foldlApps(self.ctx, inner, e_args.items[@as(usize, st.num_params)..]);
-        return outer;
-    }
-    const got = getNestedIfAuxCtor(self, st, c_name) orelse return null;
-    const nested_no_inst = got[0];
-    const aux_i_name = got[1];
-
-    std.debug.assert(e_args.items.len >= @as(usize, st.num_params));
-    const nested_inst = expr.inst(self.ctx, nested_no_inst, local_params);
-    const unfolded2 = expr.unfoldApps(self.ctx.bump, nested_inst);
-    const nested_f = unfolded2.fun;
-    const i_args = unfolded2.args;
-    switch (nested_f.asRef().kind) {
-        .@"const" => |co| {
-            const cprime_name = name_mod.replacePfx(self.ctx, c_name, aux_i_name, co.name);
-            const cprime = TcCtx.mkConst(self.ctx, cprime_name, co.levels);
-            const inner = expr.foldlApps(self.ctx, cprime, i_args.items);
-            const outer = expr.foldlApps(self.ctx, inner, e_args.items[@as(usize, st.num_params)..]);
-            return outer;
-        },
-        else => return tc.reject("expected a const head", .{}),
-    }
-}
+};
 
 fn restoreE(
     self: *TypeChecker,
@@ -1511,31 +1422,32 @@ fn restoreE(
     e_in: ExprPtr,
     nested_rec_name_to_rec_name: *const FxIndexMap(NamePtr, NamePtr),
 ) tc.Reject!ExprPtr {
-    var e = e_in;
-    const is_pi = e.asRef().kind == .pi;
-    var locals = std.ArrayList(ExprPtr).empty;
-    var i: usize = 0;
-    while (i < st.local_params.items.len) : (i += 1) {
-        switch (e.asRef().kind) {
-            .pi => |b| {
-                const local = TcCtx.mkUnique(self.ctx, b.binder_name, b.binder_style, b.binder_type);
-                e = expr.inst(self.ctx, b.body, &.{local});
-                locals.append(self.ctx.bump, local) catch util.oom();
-            },
-            .lambda => |b| {
-                const local = TcCtx.mkUnique(self.ctx, b.binder_name, b.binder_style, b.binder_type);
-                e = expr.inst(self.ctx, b.body, &.{local});
-                locals.append(self.ctx.bump, local) catch util.oom();
-            },
+    var w = Walk.empty;
+    var cur = eval.forceAll(self, 0, eval.eval(self, 0, value.envEmpty(), e_in));
+    const is_pi = cur.* == .pi;
+    var binders = std.ArrayList(VBinder).empty;
+    var domains = std.ArrayList(ExprPtr).empty;
+    var i: u16 = 0;
+    while (i < st.num_params) : (i += 1) {
+        const f = eval.forceAll(self, w.depth, cur);
+        const binder_name, const binder_style, const dom, const clo = switch (f.*) {
+            .pi => |b| .{ b.binder_name, b.binder_style, b.domain, &f.pi.body },
+            .lam => |b| .{ b.binder_name, b.binder_style, eval.lamDomain(self, w.depth, f), &f.lam.body },
             else => return tc.reject("malformed recursor", .{}),
-        }
+        };
+        domains.append(self.ctx.bump, eval.quote(self, w.depth, dom)) catch util.oom();
+        const pushed, const fresh = walkFresh(self, w, dom);
+        cur = eval.applyClosure(self, w.depth + 1, clo, fresh, dom);
+        binders.append(self.ctx.bump, VBinder{ .name = binder_name, .style = binder_style, .v = fresh }) catch util.oom();
+        w = pushed;
     }
-    const e2 = try restoreReplace(self, e, locals.items, st, nested_rec_name_to_rec_name);
-    const out = if (is_pi)
-        expr.abstrPiTelescope(self.ctx, locals.items, e2)
+    var h = RestoreCtx{ .st = st, .rec_map = nested_rec_name_to_rec_name };
+    defer h.deinit();
+    const body = try eval.quoteWith(self, &h, w.depth, cur);
+    return if (is_pi)
+        piFold(self, binders.items, domains.items, body)
     else
-        expr.abstrLambdaTelescope(self.ctx, locals.items, e2);
-    return out;
+        lamFold(self, binders.items, domains.items, body);
 }
 
 fn restoreRecursor1(
@@ -1572,16 +1484,14 @@ fn checkRestoredRecursor1(
     const resolved_rec_name = nested_rec_name_to_rec_name.get(rec_name) orelse rec_name;
     switch (if (Env.getOldDeclar(self.env, resolved_rec_name)) |d| d.* else Declar{ .axiom = undefined }) {
         .recursor => |original| {
-            self.tc_cache.clear();
-            try tc.assertDefEq(self, original.info.ty, restored.info.ty);
+            try assertClosedDefEq(self, original.info.ty, restored.info.ty);
             util.assert(original.rec_rules.len == restored.rec_rules.len);
             var i: usize = 0;
             while (i < original.rec_rules.len) : (i += 1) {
                 const old = original.rec_rules[i];
                 const new = restored.rec_rules[i];
                 util.assert(old.ctor_name == new.ctor_name);
-                self.tc_cache.clear();
-                try tc.assertDefEq(self, old.val, new.val);
+                try assertClosedDefEq(self, old.val, new.val);
             }
         },
         else => {},
@@ -1616,8 +1526,7 @@ fn checkRestoredCtor1(
 ) tc.Reject!void {
     const new_ctor = Env.getConstructor(self.env, old_ctor.info.name).?;
     const new_ty = try restoreE(self, st, new_ctor.info.ty, rec_name_map);
-    self.tc_cache.clear();
-    try tc.assertDefEq(self, old_ctor.info.ty, new_ty);
+    try assertClosedDefEq(self, old_ctor.info.ty, new_ty);
 }
 
 fn restoreAndCheck(
@@ -1634,8 +1543,7 @@ fn restoreAndCheck(
             const old = old_d.?.inductive;
             const new = new_d.?.inductive;
             std.debug.assert(old_d.? != new_d.?);
-            self.tc_cache.clear();
-            try tc.assertDefEq(self, old.info.ty, new.info.ty);
+            try assertClosedDefEq(self, old.info.ty, new.info.ty);
         } else {
             return tc.reject("malformed restored recursor", .{});
         }

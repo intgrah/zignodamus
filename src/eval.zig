@@ -40,7 +40,6 @@ const RigidKey = struct { u8, u64, u64 };
 fn rigidHeadKey(head: *const RigidHead) RigidKey {
     switch (head.*) {
         .b_var => |b| return .{ 0, @as(u64, b.lvl), @intFromPtr(b.ty) },
-        .local => |e| return .{ 1, e.getHash(), 0 },
         .axiom => |a| return .{ 2, a.name.getHash(), a.levels.getHash() },
         .ctor => |c| return .{ 3, c.name.getHash(), c.levels.getHash() },
         .recursor => |r| return .{ 4, r.name.getHash(), r.levels.getHash() },
@@ -449,7 +448,7 @@ fn evalNoCache(self: *TypeChecker, depth: u32, e: E, ex: ExprPtr) V {
         }
         const f = eval(self, depth, e, fun);
         const trivial = switch (arg.asRef().kind) {
-            .@"var", .sort, .@"const", .nat_lit, .string_lit, .local => true,
+            .@"var", .sort, .@"const", .nat_lit, .string_lit => true,
             else => false,
         };
         if (f.* == .lam) {
@@ -480,7 +479,7 @@ fn evalNoCache(self: *TypeChecker, depth: u32, e: E, ex: ExprPtr) V {
         .lambda => |l| return value.mkLam(self.arena, l.binder_name, l.binder_style, l.binder_type, Closure{ .env = keyEnv(self, e, ex), .body = l.body }),
         .pi => |p| {
             const dom = switch (p.binder_type.asRef().kind) {
-                .@"var", .sort, .@"const", .nat_lit, .string_lit, .local => eval(self, depth, e, p.binder_type),
+                .@"var", .sort, .@"const", .nat_lit, .string_lit => eval(self, depth, e, p.binder_type),
                 else => mkThunkHc(self, e, p.binder_type),
             };
             return value.mkPi(self.arena, p.binder_name, p.binder_style, dom, Closure{ .env = keyEnv(self, e, ex), .body = p.body });
@@ -499,15 +498,6 @@ fn evalNoCache(self: *TypeChecker, depth: u32, e: E, ex: ExprPtr) V {
                 }
             }
             return eval(self, depth, cur_env, cursor);
-        },
-        .local => {
-            if (self.local_v_cache.get(ex)) |v| {
-                return v;
-            }
-            const empty = value.spineEmpty();
-            const v = value.mkLocalWithEmpty(self.arena, ex, empty);
-            self.local_v_cache.put(util.smp_allocator, ex, v) catch util.oom();
-            return v;
         },
         .proj => |pr| {
             const vs = eval(self, depth, e, pr.structure);
@@ -718,7 +708,7 @@ pub fn valueType(self: *TypeChecker, depth: u32, v0: V) V {
             return value.mkRigidHeadWithEmpty(self.arena, RigidHead{ .inductive = .{ .name = n, .levels = levels } }, value.spineEmpty());
         },
         .rigid => |r| {
-            const head_ty = rigidHeadType(self, depth, r.head);
+            const head_ty = rigidHeadType(self, r.head);
             return spineType(self, depth, head_ty, r.head, r.spine);
         },
         .unfold => |u| {
@@ -733,17 +723,9 @@ pub fn valueType(self: *TypeChecker, depth: u32, v0: V) V {
     }
 }
 
-fn rigidHeadType(self: *TypeChecker, depth: u32, head: RigidHead) V {
+fn rigidHeadType(self: *TypeChecker, head: RigidHead) V {
     switch (head) {
         .b_var => |b| return b.ty,
-        .local => |e| {
-            const bt = switch (e.asRef().kind) {
-                .local => |l| l.binder_type,
-                else => @panic("value_type: Local Expr"),
-            };
-            const empty = value.envEmpty();
-            return eval(self, depth, empty, bt);
-        },
         .axiom => |h| return constHeadType(self, h.name, h.levels),
         .ctor => |h| return constHeadType(self, h.name, h.levels),
         .recursor => |h| return constHeadType(self, h.name, h.levels),
@@ -1645,20 +1627,20 @@ fn boolVal(self: *TypeChecker, b: bool) ?V {
 pub fn valueHasFreeBvar(self: *TypeChecker, depth: u32, v0: V) bool {
     const v = forceThunk(self, depth, v0);
     const key = @intFromPtr(v);
-    if (self.tc_cache.fvar_cache.get(key)) |b| {
+    if (self.tc_cache.free_bvar_cache.get(key)) |b| {
         return b;
     }
     const r = switch (v.*) {
         .sort, .nat_lit, .str_lit => false,
         .rigid => |rg| switch (rg.head) {
-            .b_var, .local => true,
+            .b_var => true,
             else => spineHasFreeBvar(self, depth, rg.spine),
         },
         .unfold => |u| spineHasFreeBvar(self, depth, u.spine),
         .lam, .pi => false,
         .thunk => @panic("force_thunk left a Thunk"),
     };
-    self.tc_cache.fvar_cache.put(util.smp_allocator, key, r) catch util.oom();
+    self.tc_cache.free_bvar_cache.put(util.smp_allocator, key, r) catch util.oom();
     return r;
 }
 
@@ -1772,52 +1754,69 @@ inline fn eqOpt(opt: ?NamePtr, name: NamePtr) bool {
     return if (opt) |o| o == name else false;
 }
 
-pub fn quote(self: *TypeChecker, depth: u32, v0: V) ExprPtr {
+pub const QuoteMemo = @import("swiss_map.zig").FxHashMap(struct { usize, u32 }, ExprPtr);
+
+const PlainQuote = struct {
+    memo: *QuoteMemo,
+
+    pub fn hook(_: *PlainQuote, _: *TypeChecker, _: u32, _: V) tc.Reject!?ExprPtr {
+        return null;
+    }
+};
+
+pub fn quote(self: *TypeChecker, depth: u32, v: V) ExprPtr {
+    var plain = PlainQuote{ .memo = &self.tc_cache.quote_cache };
+    return quoteWith(self, &plain, depth, v) catch unreachable;
+}
+
+pub fn quoteWith(self: *TypeChecker, hctx: anytype, depth: u32, v0: V) tc.Reject!ExprPtr {
     const v = forceThunk(self, depth, v0);
     const key = .{ @intFromPtr(v), depth };
-    if (self.tc_cache.quote_cache.get(key)) |q| {
+    if (hctx.memo.get(key)) |q| {
         return q;
     }
-    const r: ExprPtr = switch (v.*) {
-        .sort => |s| TcCtx.mkSort(self.ctx, s.level),
-        .nat_lit => |n| TcCtx.mkNatLit(self.ctx, n.ptr) orelse @panic("quote: nat literal without extension"),
-        .str_lit => |s| TcCtx.mkStringLit(self.ctx, s.ptr) orelse @panic("quote: string literal without extension"),
-        .rigid => |rg| blk: {
-            const head: ExprPtr = switch (rg.head) {
-                .b_var => |b| head: {
-                    util.assert(b.lvl < depth);
-                    break :head TcCtx.mkVar(self.ctx, @intCast(depth - 1 - b.lvl));
-                },
-                .local => |ex| ex,
-                .axiom, .ctor, .recursor, .quot_const, .inductive => |nl| TcCtx.mkConst(self.ctx, nl.name, nl.levels),
-            };
-            break :blk quoteSpine(self, depth, head, rg.spine);
-        },
-        .unfold => |u| quoteSpine(self, depth, TcCtx.mkConst(self.ctx, u.head.name, u.head.levels), u.spine),
-        .lam => |l| blk: {
-            const dom = lamDomain(self, depth, v);
-            const fresh = mkBvarHc(self, depth, dom);
-            const body = applyClosure(self, depth + 1, &v.lam.body, fresh, dom);
-            break :blk TcCtx.mkLambda(self.ctx, l.binder_name, l.binder_style, quote(self, depth, dom), quote(self, depth + 1, body));
-        },
-        .pi => |p| blk: {
-            const fresh = mkBvarHc(self, depth, p.domain);
-            const body = applyClosure(self, depth + 1, &v.pi.body, fresh, p.domain);
-            break :blk TcCtx.mkPi(self.ctx, p.binder_name, p.binder_style, quote(self, depth, p.domain), quote(self, depth + 1, body));
-        },
-        .thunk => @panic("quote: thunk after force"),
+    const r: ExprPtr = blk: {
+        if (try hctx.hook(self, depth, v)) |e| break :blk e;
+        break :blk switch (v.*) {
+            .sort => |s| TcCtx.mkSort(self.ctx, s.level),
+            .nat_lit => |n| TcCtx.mkNatLit(self.ctx, n.ptr) orelse @panic("quote: nat literal without extension"),
+            .str_lit => |s| TcCtx.mkStringLit(self.ctx, s.ptr) orelse @panic("quote: string literal without extension"),
+            .rigid => |rg| rigid: {
+                const head: ExprPtr = switch (rg.head) {
+                    .b_var => |b| head: {
+                        util.assert(b.lvl < depth);
+                        break :head TcCtx.mkVar(self.ctx, @intCast(depth - 1 - b.lvl));
+                    },
+                    .axiom, .ctor, .recursor, .quot_const, .inductive => |nl| TcCtx.mkConst(self.ctx, nl.name, nl.levels),
+                };
+                break :rigid try quoteSpineWith(self, hctx, depth, head, rg.spine);
+            },
+            .unfold => |u| try quoteSpineWith(self, hctx, depth, TcCtx.mkConst(self.ctx, u.head.name, u.head.levels), u.spine),
+            .lam => |l| lam: {
+                const dom = lamDomain(self, depth, v);
+                const fresh = mkBvarHc(self, depth, dom);
+                const body = applyClosure(self, depth + 1, &v.lam.body, fresh, dom);
+                break :lam TcCtx.mkLambda(self.ctx, l.binder_name, l.binder_style, try quoteWith(self, hctx, depth, dom), try quoteWith(self, hctx, depth + 1, body));
+            },
+            .pi => |p| pi: {
+                const fresh = mkBvarHc(self, depth, p.domain);
+                const body = applyClosure(self, depth + 1, &v.pi.body, fresh, p.domain);
+                break :pi TcCtx.mkPi(self.ctx, p.binder_name, p.binder_style, try quoteWith(self, hctx, depth, p.domain), try quoteWith(self, hctx, depth + 1, body));
+            },
+            .thunk => @panic("quote: thunk after force"),
+        };
     };
-    self.tc_cache.quote_cache.put(util.smp_allocator, key, r) catch util.oom();
+    hctx.memo.put(util.smp_allocator, key, r) catch util.oom();
     return r;
 }
 
-fn quoteSpine(self: *TypeChecker, depth: u32, head: ExprPtr, s: S) ExprPtr {
+pub fn quoteSpineWith(self: *TypeChecker, hctx: anytype, depth: u32, head: ExprPtr, s: S) tc.Reject!ExprPtr {
     if (s.isEmpty()) {
         return head;
     }
-    const prefix = quoteSpine(self, depth, head, s.prev);
+    const prefix = try quoteSpineWith(self, hctx, depth, head, s.prev);
     if (s.elim.isApp()) {
-        return TcCtx.mkApp(self.ctx, prefix, quote(self, depth, s.elim.appV()));
+        return TcCtx.mkApp(self.ctx, prefix, try quoteWith(self, hctx, depth, s.elim.appV()));
     }
     return TcCtx.mkProj(self.ctx, s.elim.projTyName(), s.elim.projIdx(), prefix);
 }

@@ -31,10 +31,6 @@ fn rigidHeadEq(hx: RigidHead, hy: RigidHead) bool {
             .b_var => |b| a.lvl == b.lvl,
             else => false,
         },
-        .local => |a| switch (hy) {
-            .local => |b| a == b,
-            else => false,
-        },
         else => false,
     };
 }
@@ -48,17 +44,6 @@ fn isCacheable(v: *const Value) bool {
         },
         else => false,
     };
-}
-
-pub fn defEqCore(self: *TypeChecker, x: ExprPtr, y: ExprPtr) bool {
-    const depth: u32 = self.ctx.dbj_level_counter;
-    const env = value.envEmpty();
-    const vx = eval.eval(self, depth, env, x);
-    const vy = eval.eval(self, depth, env, y);
-    if (tryProofIrrelAt(self, depth, vx, vy)) {
-        return true;
-    }
-    return convTypesAt(self, depth, vx, vy);
 }
 
 pub fn convTypesAt(self: *TypeChecker, depth: u32, a: V, b: V) bool {
@@ -800,7 +785,7 @@ fn levelOfType(self: *TypeChecker, depth: u32, ty_in: V) ?LevelPtr {
                     else => return null,
                 }
             },
-            .b_var, .local => {
+            .b_var => {
                 const t = eval.valueType(self, depth, ty);
                 const ty_f = eval.forceAll(self, depth, t);
                 switch (ty_f.*) {

@@ -23,8 +23,6 @@ export_file: *const ExportFile,
 arena: *Arena,
 bump: std.mem.Allocator,
 dag: Dag,
-dbj_level_counter: u16,
-unique_counter: u32,
 expr_cache: ExprCache,
 
 pub const ExprCache = struct {
@@ -51,8 +49,6 @@ pub fn init(export_file: *const ExportFile, ar: *Arena) TcCtx {
         .arena = ar,
         .bump = ar.bumpAllocator(),
         .dag = dag,
-        .dbj_level_counter = 0,
-        .unique_counter = 0,
         .expr_cache = .empty,
     };
 }
@@ -74,7 +70,6 @@ fn isExprLocalOnly(e: *const expr.Expr) bool {
         .pi => |x| x.binder_name.isLocal() or x.binder_type.isLocal() or x.body.isLocal(),
         .lambda => |x| x.binder_name.isLocal() or x.binder_type.isLocal() or x.body.isLocal(),
         .let => |x| x.data.binder_name.isLocal() or x.data.binder_type.isLocal() or x.data.val.isLocal() or x.data.body.isLocal(),
-        .local => true,
     };
 }
 
@@ -235,26 +230,6 @@ pub fn mkPi(
     return allocExpr(self, &e);
 }
 
-pub fn mkLet(
-    self: *TcCtx,
-    binder_name: NamePtr,
-    binder_type: ExprPtr,
-    val: ExprPtr,
-    body: ExprPtr,
-    nondep: bool,
-) ExprPtr {
-    const d = self.arena.create(expr.LetData);
-    d.* = .{
-        .binder_name = binder_name,
-        .binder_type = binder_type,
-        .val = val,
-        .body = body,
-        .nondep = nondep,
-    };
-    const e: expr.Expr = .mk(.{ .let = .{ .data = d } });
-    return allocExpr(self, &e);
-}
-
 pub fn mkProj(self: *TcCtx, ty_name: NamePtr, idx: usize, structure: ExprPtr) ExprPtr {
     const e: expr.Expr = .mk(.{ .proj = .{
         .ty_name = ty_name,
@@ -272,93 +247,10 @@ pub fn mkStringLit(self: *TcCtx, string_ptr: StringPtr) ?ExprPtr {
     return allocExpr(self, &e);
 }
 
-pub fn mkStringLitQuick(self: *TcCtx, s: []const u8) ?ExprPtr {
-    if (!self.export_file.config.string_extension) {
-        return null;
-    }
-    const string_ptr = allocString(self, s);
-    return mkStringLit(self, string_ptr);
-}
-
 pub fn mkNatLit(self: *TcCtx, num_ptr: BigUintPtr) ?ExprPtr {
     if (!self.export_file.config.nat_extension) {
         return null;
     }
     const e: expr.Expr = .mk(.{ .nat_lit = .{ .ptr = num_ptr } });
     return allocExpr(self, &e);
-}
-
-pub fn mkNatLitQuick(self: *TcCtx, n: BigUint) ?ExprPtr {
-    const num_ptr = allocBignum(self, n) orelse return null;
-    return mkNatLit(self, num_ptr);
-}
-
-pub fn mkDbjLevel(
-    self: *TcCtx,
-    binder_name: NamePtr,
-    binder_style: expr.BinderStyle,
-    binder_type: ExprPtr,
-) ExprPtr {
-    const lvl = self.dbj_level_counter;
-    self.dbj_level_counter += 1;
-    const id = expr.FVarId{ .dbj_level = lvl };
-    const e: expr.Expr = .mk(.{ .local = .{
-        .binder_name = binder_name,
-        .binder_style = binder_style,
-        .binder_type = binder_type,
-        .id = id,
-    } });
-    return allocExpr(self, &e);
-}
-
-pub fn remakeDbjLevel(
-    self: *TcCtx,
-    binder_name: NamePtr,
-    binder_style: expr.BinderStyle,
-    binder_type: ExprPtr,
-    lvl: u16,
-) ExprPtr {
-    const id = expr.FVarId{ .dbj_level = lvl };
-    const e: expr.Expr = .mk(.{ .local = .{
-        .binder_name = binder_name,
-        .binder_style = binder_style,
-        .binder_type = binder_type,
-        .id = id,
-    } });
-    return allocExpr(self, &e);
-}
-
-pub fn mkUnique(
-    self: *TcCtx,
-    binder_name: NamePtr,
-    binder_style: expr.BinderStyle,
-    binder_type: ExprPtr,
-) ExprPtr {
-    const unique_id = self.unique_counter;
-    self.unique_counter += 1;
-    const id = expr.FVarId{ .unique = unique_id };
-    const e: expr.Expr = .mk(.{ .local = .{
-        .binder_name = binder_name,
-        .binder_style = binder_style,
-        .binder_type = binder_type,
-        .id = id,
-    } });
-    return allocExpr(self, &e);
-}
-
-pub fn replaceDbjLevel(self: *TcCtx, e: ExprPtr) void {
-    switch (e.asRef().kind) {
-        .local => |loc| switch (loc.id) {
-            .dbj_level => |lvl| {
-                std.debug.assert(lvl + 1 == self.dbj_level_counter);
-                self.dbj_level_counter -= 1;
-            },
-            else => @panic("replace_dbj_level didn't get a DbjLevel Local"),
-        },
-        else => @panic("replace_dbj_level didn't get a Local"),
-    }
-}
-
-pub fn fvarToBvar(self: *TcCtx, num_open_binders: u16, dbj_level: u16) ExprPtr {
-    return mkVar(self, (num_open_binders - dbj_level) - 1);
 }

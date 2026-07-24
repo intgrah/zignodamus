@@ -29,7 +29,6 @@ pub const NameLevels = struct { name: NamePtr, levels: LevelsPtr };
 
 pub const RigidHead = union(enum) {
     b_var: struct { lvl: u32, ty: V },
-    local: ExprPtr,
     axiom: NameLevels,
     ctor: NameLevels,
     recursor: NameLevels,
@@ -342,12 +341,6 @@ pub fn mkNatlit(arena: *Arena, ptr: BigUintPtr) V {
 pub fn mkStrlit(arena: *Arena, ptr: StringPtr) V {
     const v = arena.create(Value);
     v.* = .{ .str_lit = .{ .ptr = ptr } };
-    return v;
-}
-
-pub fn mkLocalWithEmpty(arena: *Arena, e: ExprPtr, empty: S) V {
-    const v = arena.create(Value);
-    v.* = .{ .rigid = .{ .head = .{ .local = e }, .spine = empty } };
     return v;
 }
 

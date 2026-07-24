@@ -28,9 +28,6 @@ pub fn checkDeclarInfo(self: *TypeChecker, d: *const Declar) Reject!void {
     if (!level.noDupesAllParams(self.ctx, info.uparams)) {
         return tc.reject("duplicate universe parameters in declaration", .{});
     }
-    if (info.ty.hasFvars()) {
-        return tc.reject("declaration type contains free variables", .{});
-    }
     const ty_ty = try infer(self, 0, value.envEmpty(), value.ctxEmpty(), info.ty, .Check);
     const sort = try ensureSort(self, 0, ty_ty);
     if (d.* == .theorem) {
@@ -70,7 +67,7 @@ fn inferSortOf(self: *TypeChecker, depth: u32, e: E, c: C, ex: ExprPtr, comptime
 
 fn argValue(self: *TypeChecker, depth: u32, e: E, a: ExprPtr) V {
     return switch (a.asRef().kind) {
-        .@"var", .sort, .@"const", .nat_lit, .string_lit, .local => eval.eval(self, depth, e, a),
+        .@"var", .sort, .@"const", .nat_lit, .string_lit => eval.eval(self, depth, e, a),
         else => eval.mkThunkHc(self, e, a),
     };
 }
@@ -104,7 +101,6 @@ fn litInductiveType(self: *TypeChecker, n: ?NamePtr) V {
 pub fn infer(self: *TypeChecker, depth: u32, e: E, c: C, ex: ExprPtr, comptime flag: InferFlag) Reject!V {
     switch (ex.asRef().kind) {
         .@"var" => |x| return c.lookup(x.dbj_idx) orelse tc.reject("loose bvar in infer", .{}),
-        .local => |l| return eval.eval(self, depth, value.envEmpty(), l.binder_type),
         .sort => |s| {
             if (flag == .Check) {
                 if (self.declar_info) |declar_info| {

@@ -30,7 +30,6 @@ pub fn debugPrint(f: *Writer, elem: anytype) Error!void {
         LevelsPtr => return debugLevels(f, elem),
         StringPtr => return debugString(f, elem),
         BigUintPtr => return debugBignum(f, elem),
-        expr.FVarId => return debugFvarId(f, elem),
         *const DeclarInfo, *DeclarInfo => return debugDeclarInfo(f, elem),
         DeclarInfo => return debugDeclarInfo(f, &elem),
         RecRule => return debugRecRule(f, elem),
@@ -141,20 +140,9 @@ fn debugExpr(f: *Writer, elem: ExprPtr) Error!void {
             "fun ({f} : {f}) => {f}",
             .{ d(la.binder_name), d(la.binder_type), d(la.body) },
         ),
-        .local => |lo| try f.print(
-            "#({f}, {f} : {f})",
-            .{ d(lo.binder_name), d(lo.id), d(lo.binder_type) },
-        ),
         .proj => |pr| try f.print("%({f}).{d}", .{ d(pr.structure), pr.idx }),
         .nat_lit => |nl| try f.print("NLit({any})", .{nl.ptr.asRef()}),
         .string_lit => |sl| try f.print("SLit({s})", .{sl.ptr.asRef().*}),
-    }
-}
-
-fn debugFvarId(f: *Writer, id: expr.FVarId) Error!void {
-    switch (id) {
-        .dbj_level => |x| try f.print("DbjLevel({d})", .{x}),
-        .unique => |x| try f.print("Unique({d})", .{x}),
     }
 }
 
@@ -199,7 +187,6 @@ test {
     _ = &debugLevels;
     _ = &debugString;
     _ = &debugBignum;
-    _ = &debugFvarId;
     _ = &debugDeclarInfo;
     _ = &debugRecRule;
     _ = &debugReducibilityHint;

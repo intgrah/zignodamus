@@ -63,15 +63,13 @@ pub const BigUintPtr = Ptr(BigUint);
 /// ## 64-bit
 /// - 16 bit num_loose_bvars
 /// - 45 bit address
-/// - 1 bit unused
-/// - 1 bit has_fvars
+/// - 2 bits unused
 /// - 1 bit is_local
 /// Assumption: 8-byte alignment means lower 3 bits are free
 ///
 /// ## 32-bit
 /// - 16 bit num_loose_bvars
-/// - 14 bits unused
-/// - 1 bit has_fvars
+/// - 15 bits unused
 /// - 1 bit is_local
 /// - 32 bit address
 pub const ExprPtr = enum(u64) {
@@ -80,7 +78,6 @@ pub const ExprPtr = enum(u64) {
     const Self = @This();
     const addr_mask: u64 = if (is_64) 0x0000_ffff_ffff_fff8 else 0xffff_ffff;
     const local_bit: u64 = if (is_64) 1 << 0 else 1 << 32;
-    const fvar_bit: u64 = if (is_64) 1 << 1 else 1 << 33;
     const bvar_shift: u6 = 48;
 
     comptime {
@@ -107,41 +104,23 @@ pub const ExprPtr = enum(u64) {
         return switch (r.kind) {
             .string_lit, .nat_lit, .sort, .@"const" => 0,
             .@"var" => |x| (@as(u64, x.dbj_idx) + 1) << bvar_shift,
-            .local => fvar_bit,
-            .app => |x| bits(
-                @max(x.fun.numLooseBvars(), x.arg.numLooseBvars()),
-                x.fun.hasFvars() or x.arg.hasFvars(),
-            ),
-            .pi => |x| bits(
-                @max(x.binder_type.numLooseBvars(), x.body.numLooseBvars() -| 1),
-                x.binder_type.hasFvars() or x.body.hasFvars(),
-            ),
-            .lambda => |x| bits(
-                @max(x.binder_type.numLooseBvars(), x.body.numLooseBvars() -| 1),
-                x.binder_type.hasFvars() or x.body.hasFvars(),
-            ),
-            .let => |x| bits(
-                @max(
-                    x.data.binder_type.numLooseBvars(),
-                    @max(x.data.val.numLooseBvars(), x.data.body.numLooseBvars() -| 1),
-                ),
-                x.data.binder_type.hasFvars() or x.data.val.hasFvars() or x.data.body.hasFvars(),
-            ),
-            .proj => |x| bits(x.structure.numLooseBvars(), x.structure.hasFvars()),
+            .app => |x| bits(@max(x.fun.numLooseBvars(), x.arg.numLooseBvars())),
+            .pi => |x| bits(@max(x.binder_type.numLooseBvars(), x.body.numLooseBvars() -| 1)),
+            .lambda => |x| bits(@max(x.binder_type.numLooseBvars(), x.body.numLooseBvars() -| 1)),
+            .let => |x| bits(@max(
+                x.data.binder_type.numLooseBvars(),
+                @max(x.data.val.numLooseBvars(), x.data.body.numLooseBvars() -| 1),
+            )),
+            .proj => |x| bits(x.structure.numLooseBvars()),
         };
     }
 
-    fn bits(num_loose_bvars: u16, has_fvars: bool) u64 {
-        return (@as(u64, num_loose_bvars) << bvar_shift) |
-            (@as(u64, @intFromBool(has_fvars)) * fvar_bit);
+    fn bits(num_loose_bvars: u16) u64 {
+        return @as(u64, num_loose_bvars) << bvar_shift;
     }
 
     pub fn isLocal(self: Self) bool {
         return (@intFromEnum(self) & local_bit) != 0;
-    }
-
-    pub fn hasFvars(self: Self) bool {
-        return (@intFromEnum(self) & fvar_bit) != 0;
     }
 
     pub fn numLooseBvars(self: Self) u16 {
