@@ -112,29 +112,13 @@ fn conv(self: *TypeChecker, comptime RIGID: bool, depth: u32, x_in: V, y_in: V) 
 }
 
 fn bvarSingleApps(x: V, y: V) ?[2]V {
-    switch (x.*) {
-        .rigid => |rx| switch (rx.head) {
-            .b_var => |la| switch (y.*) {
-                .rigid => |ry| switch (ry.head) {
-                    .b_var => |lb| {
-                        if (la.lvl != lb.lvl) return null;
-                        const sx = rx.spine;
-                        const sy = ry.spine;
-                        if (sx != &Spine.empty and sx.prev == &Spine.empty and sx.elim.isApp() and
-                            sy != &Spine.empty and sy.prev == &Spine.empty and sy.elim.isApp())
-                        {
-                            return .{ sx.elim.appV(), sy.elim.appV() };
-                        }
-                        return null;
-                    },
-                    else => return null,
-                },
-                else => return null,
-            },
-            else => return null,
-        },
-        else => return null,
-    }
+    if (x.* != .rigid or y.* != .rigid) return null;
+    const rx = x.rigid;
+    const ry = y.rigid;
+    if (rx.head != .b_var or ry.head != .b_var) return null;
+    if (rx.head.b_var.lvl != ry.head.b_var.lvl) return null;
+    if (!rx.spine.isSingleApp() or !ry.spine.isSingleApp()) return null;
+    return .{ rx.spine.elim.appV(), ry.spine.elim.appV() };
 }
 
 fn isLam(v: V) bool {

@@ -237,20 +237,12 @@ fn inferProj(
     const struct_ty = try infer(self, depth, e, c, structure, flag);
     const struct_ty_f = eval.forceAll(self, depth, struct_ty);
     const struct_ty_is_prop = conv.isPropType(self, depth, struct_ty_f);
-    var ind_name: NamePtr = undefined;
-    var ind_levels: ptr.LevelsPtr = undefined;
-    var params: []const V = undefined;
-    switch (struct_ty_f.*) {
-        .rigid => |r| switch (r.head) {
-            .inductive => |h| {
-                ind_name = h.name;
-                ind_levels = h.levels;
-                params = eval.spineApps(self, depth, r.spine) orelse return tc.reject("projection structure type has a non-applicative spine", .{});
-            },
-            else => return tc.reject("projection structure type is not an inductive", .{}),
-        },
-        else => return tc.reject("projection structure type is not an inductive", .{}),
+    if (struct_ty_f.* != .rigid or struct_ty_f.rigid.head != .inductive) {
+        return tc.reject("projection structure type is not an inductive", .{});
     }
+    const ind_name = struct_ty_f.rigid.head.inductive.name;
+    const ind_levels = struct_ty_f.rigid.head.inductive.levels;
+    const params = eval.spineApps(self, depth, struct_ty_f.rigid.spine) orelse return tc.reject("projection structure type has a non-applicative spine", .{});
     defer self.ctx.bump.free(params);
     const ind = self.env.getInductive(ind_name) orelse return tc.reject("projection structure type is not an inductive", .{});
     const ctor_name = ind.all_ctor_names[0];

@@ -187,6 +187,10 @@ pub const Spine = struct {
         return self == &empty;
     }
 
+    pub fn isSingleApp(self: *const Spine) bool {
+        return self != &empty and self.prev == &empty and self.elim.isApp();
+    }
+
     pub fn toVec(self: *const Spine, gpa: std.mem.Allocator) []const *const Elim {
         const length: usize = @intCast(self.length);
         const out = gpa.alloc(*const Elim, length) catch util.oom();
