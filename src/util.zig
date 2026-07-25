@@ -6,7 +6,7 @@ pub fn assert(cond: bool) void {
 
 pub fn oom() noreturn {
     std.debug.print("out of memory\n", .{});
-    std.process.exit(2);
+    std.process.exit(3);
 }
 
 pub const smp_allocator = std.heap.c_allocator;
