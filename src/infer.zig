@@ -228,7 +228,7 @@ fn inferProj(
     e: E,
     c: C,
     ty_name: NamePtr,
-    idx: usize,
+    idx: u16,
     structure: ExprPtr,
 ) Reject!V {
     _ = ty_name;
@@ -261,7 +261,7 @@ fn inferProj(
         }
     }
     {
-        var i: usize = 0;
+        var i: u16 = 0;
         while (i < idx) : (i += 1) {
             const cf = eval.forceAll(self, depth, cur);
             switch (cf.*) {

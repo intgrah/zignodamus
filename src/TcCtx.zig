@@ -215,7 +215,7 @@ pub fn mkPi(
     return allocExpr(self, &e);
 }
 
-pub fn mkProj(self: *TcCtx, ty_name: NamePtr, idx: usize, structure: ExprPtr) ExprPtr {
+pub fn mkProj(self: *TcCtx, ty_name: NamePtr, idx: u16, structure: ExprPtr) ExprPtr {
     const e: expr.Expr = .mk(.{ .proj = .{
         .ty_name = ty_name,
         .idx = idx,

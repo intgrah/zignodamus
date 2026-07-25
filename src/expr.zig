@@ -73,7 +73,7 @@ pub const Expr = struct {
         },
         proj: struct {
             ty_name: NamePtr,
-            idx: usize,
+            idx: u16,
             structure: ExprPtr,
         },
         @"var": struct {

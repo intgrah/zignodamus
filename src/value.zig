@@ -85,10 +85,9 @@ pub const Elim = struct {
         std.debug.assert(addr & ~name_mask == 0);
         return .{ .bits = addr };
     }
-    pub fn mkProj(ty_name: NamePtr, idx: usize) Elim {
+    pub fn mkProj(ty_name: NamePtr, idx: u16) Elim {
         const low: u64 = ty_name.lowTagged();
         std.debug.assert(low & ~name_mask == 0);
-        std.debug.assert(idx <= std.math.maxInt(u16));
         return .{ .bits = low | (@as(u64, idx) << idx_shift) };
     }
     pub fn isApp(self: Elim) bool {
@@ -100,8 +99,8 @@ pub const Elim = struct {
     pub fn projTyName(self: Elim) NamePtr {
         return NamePtr.fromLowTagged(@intCast(self.bits & name_mask));
     }
-    pub fn projIdx(self: Elim) usize {
-        return @intCast(self.bits >> idx_shift);
+    pub fn projIdx(self: Elim) u16 {
+        return @truncate(self.bits >> idx_shift);
     }
     pub fn raw(self: Elim) u64 {
         return self.bits;

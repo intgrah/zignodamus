@@ -644,10 +644,10 @@ fn tryEtaStructV(self: *TypeChecker, depth: u32, ind_name: NamePtr, x: V, y: V) 
         }
         return false;
     };
-    var i: usize = 0;
-    while (i < @as(usize, num_fields)) : (i += 1) {
+    var i: u16 = 0;
+    while (i < num_fields) : (i += 1) {
         const proj = eval.doProj(self, depth, ind_name, i, x);
-        const rhs = yargs[@as(usize, num_params) + i];
+        const rhs = yargs[@as(usize, num_params) + @as(usize, i)];
         if (!conv(self, .rigid, depth, proj, rhs)) {
             return false;
         }

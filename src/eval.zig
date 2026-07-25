@@ -801,7 +801,7 @@ pub fn forceHead(self: *TypeChecker, depth: u32, v: V) V {
     }
 }
 
-pub fn doProj(self: *TypeChecker, depth: u32, ty_name: NamePtr, idx: usize, v0: V) V {
+pub fn doProj(self: *TypeChecker, depth: u32, ty_name: NamePtr, idx: u16, v0: V) V {
     const v = forceHead(self, depth, v0);
     switch (v.*) {
         .rigid => |r| switch (r.head) {
@@ -834,7 +834,7 @@ pub fn doProj(self: *TypeChecker, depth: u32, ty_name: NamePtr, idx: usize, v0: 
     }
 }
 
-fn projExtendSpine(self: *TypeChecker, ty_name: NamePtr, idx: usize, v: V) V {
+fn projExtendSpine(self: *TypeChecker, ty_name: NamePtr, idx: u16, v: V) V {
     switch (v.*) {
         .rigid => |r| {
             const h = r.head;
@@ -860,7 +860,7 @@ pub fn projFieldTypeWith(
     struct_value: V,
     struct_ty0: V,
     ty_name: NamePtr,
-    idx: usize,
+    idx: u16,
 ) ?V {
     const struct_ty = forceAll(self, depth, struct_ty0);
     var ind_name: NamePtr = undefined;
@@ -902,12 +902,12 @@ pub fn projFieldTypeWith(
             else => return null,
         }
     }
-    i = 0;
-    while (i < idx) : (i += 1) {
+    var f: u16 = 0;
+    while (f < idx) : (f += 1) {
         const cf = forceAll(self, depth, cur);
         switch (cf.*) {
             .pi => {
-                const prior = doProj(self, depth, ty_name, i, struct_value);
+                const prior = doProj(self, depth, ty_name, f, struct_value);
                 cur = applyClosure(self, depth, &cf.pi.body, prior, cf.pi.domain);
             },
             else => return null,
@@ -1373,7 +1373,7 @@ fn tryStructEtaReduceUncached(
     const ind = self.env.getInductive(ty_name) orelse return null;
     const ctor_name = ind.all_ctor_names[0];
     const ctor_data = self.env.getConstructor(ctor_name) orelse return null;
-    const num_fields = @as(usize, ctor_data.num_fields);
+    const num_fields = ctor_data.num_fields;
     const np = @as(usize, rec.num_params);
     var new_ctor = value.mkRigidHeadWithEmpty(self.arena, RigidHead{ .ctor = .{ .name = ctor_name, .levels = ty_levels } }, value.spineEmpty());
     {
@@ -1383,7 +1383,7 @@ fn tryStructEtaReduceUncached(
             new_ctor = apply(self, depth, new_ctor, ty_args[i]);
         }
     }
-    var i: usize = 0;
+    var i: u16 = 0;
     while (i < num_fields) : (i += 1) {
         const proj = doProj(self, depth, ty_name, i, major);
         new_ctor = apply(self, depth, new_ctor, proj);

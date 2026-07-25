@@ -234,7 +234,7 @@ pub fn doProj(self: *Parser, idx: BackRef, ty_name_idx: u32, proj_idx: usize, st
     const structure = try getExprPtr(self, struct_idx);
     pushExpr(self, idx, .mk(.{ .proj = .{
         .ty_name = ty_name,
-        .idx = proj_idx,
+        .idx = @intCast(proj_idx),
         .structure = structure,
     } }));
 }
