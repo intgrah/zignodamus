@@ -8,6 +8,7 @@ const expr = @import("../expr.zig");
 const level = @import("../level.zig");
 const name = @import("../name.zig");
 const Dag = @import("../Dag.zig");
+const IndexArray = @import("../index_array.zig").IndexArray;
 const Config = @import("../export_file.zig").Config;
 const ExportFile = @import("../export_file.zig").ExportFile;
 const json = @import("json.zig");
@@ -70,23 +71,23 @@ pub const Parser = struct {
     dag: Dag,
     anon: NamePtr,
     zero: LevelPtr,
-    names_by_idx: std.ArrayList(NamePtr),
-    levels_by_idx: std.ArrayList(LevelPtr),
-    exprs_by_idx: std.ArrayList(ExprPtr),
+    names_by_idx: IndexArray(NamePtr),
+    levels_by_idx: IndexArray(LevelPtr),
+    exprs_by_idx: IndexArray(ExprPtr),
     pending_exprs: std.ArrayList(*const expr.Expr),
     declars: env.DeclarMap,
     config: Config,
     skipped: std.ArrayList([]const u8),
     mutual_block_sizes: swiss_map.FxHashMap(NamePtr, struct { usize, usize }),
 
-    pub fn init(ar: *Arena, config: Config) Parser {
+    pub fn init(ar: *Arena, config: Config, input_len: usize) Parser {
         var dag = Dag.init(&config);
         const anon = NamePtr.global(dag.names.intern(ar, Name.anon));
         const zero = LevelPtr.global(dag.levels.intern(ar, Level.zero));
-        var names_by_idx: std.ArrayList(NamePtr) = .empty;
-        names_by_idx.append(util.smp_allocator, anon) catch util.oom();
-        var levels_by_idx: std.ArrayList(LevelPtr) = .empty;
-        levels_by_idx.append(util.smp_allocator, zero) catch util.oom();
+        var names_by_idx = IndexArray(NamePtr).init(input_len / 128);
+        names_by_idx.set(0, anon);
+        var levels_by_idx = IndexArray(LevelPtr).init(input_len / 1024);
+        levels_by_idx.set(0, zero);
         return .{
             .line_num = 0,
             .arena = ar,
@@ -95,7 +96,7 @@ pub const Parser = struct {
             .zero = zero,
             .names_by_idx = names_by_idx,
             .levels_by_idx = levels_by_idx,
-            .exprs_by_idx = .empty,
+            .exprs_by_idx = IndexArray(ExprPtr).init(input_len / 24),
             .pending_exprs = .empty,
             .declars = swiss_map.FxIndexMap(NamePtr, Declar).empty,
             .config = config,
@@ -118,7 +119,7 @@ fn reclaimConsumed(input: []const u8, dropped: usize, consumed: usize) usize {
 }
 
 pub fn parseExportFile(ar: *Arena, input: []const u8, config: Config) ParseError!struct { ExportFile, []const []const u8 } {
-    var parser = Parser.init(ar, config);
+    var parser = Parser.init(ar, config, input.len);
     var scratch = Arena.init(util.smp_allocator);
     defer scratch.deinit();
     scratch.reserve(256 << 10);
@@ -139,9 +140,9 @@ pub fn parseExportFile(ar: *Arena, input: []const u8, config: Config) ParseError
         parser.line_num += 1;
     }
 
-    parser.names_by_idx.deinit(util.smp_allocator);
-    parser.levels_by_idx.deinit(util.smp_allocator);
-    parser.exprs_by_idx.deinit(util.smp_allocator);
+    parser.names_by_idx.deinit();
+    parser.levels_by_idx.deinit();
+    parser.exprs_by_idx.deinit();
     parser.dag.exprs.buildUnique(parser.pending_exprs.items);
     parser.pending_exprs.deinit(util.smp_allocator);
 

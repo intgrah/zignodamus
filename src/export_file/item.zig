@@ -25,60 +25,36 @@ const ParseError = parser.ParseError;
 const fail = parser.fail;
 const decline = parser.decline;
 
-fn resizeOpt(comptime T: type, list: *std.ArrayList(T), new_len: usize, nil: T) void {
-    const old_len = list.items.len;
-    list.resize(util.smp_allocator, new_len) catch util.oom();
-    @memset(list.items[old_len..], nil);
-}
-
 fn pushName(self: *Parser, expected: BackRef, n: Name) void {
-    const i = @as(usize, expected.index());
-    if (i >= self.names_by_idx.items.len) {
-        resizeOpt(NamePtr, &self.names_by_idx, i + 1, NamePtr.nil);
-    }
-    self.names_by_idx.items[i] = NamePtr.global(self.dag.names.insertUnique(self.arena, n));
+    self.names_by_idx.set(expected.index(), NamePtr.global(self.dag.names.insertUnique(self.arena, n)));
 }
 
 fn pushLevel(self: *Parser, expected: BackRef, l: Level) void {
-    const i = @as(usize, expected.index());
-    if (i >= self.levels_by_idx.items.len) {
-        resizeOpt(LevelPtr, &self.levels_by_idx, i + 1, LevelPtr.nil);
-    }
-    self.levels_by_idx.items[i] = LevelPtr.global(self.dag.levels.insertUnique(self.arena, l));
+    self.levels_by_idx.set(expected.index(), LevelPtr.global(self.dag.levels.insertUnique(self.arena, l)));
 }
 
 fn pushExpr(self: *Parser, expected: BackRef, e: Expr) void {
     const r = self.arena.create(Expr);
     r.* = e;
     self.pending_exprs.append(util.smp_allocator, r) catch util.oom();
-    const i = @as(usize, expected.index());
-    if (i >= self.exprs_by_idx.items.len) {
-        resizeOpt(ExprPtr, &self.exprs_by_idx, i + 1, ExprPtr.nil);
-    }
-    self.exprs_by_idx.items[i] = ExprPtr.global(r);
+    self.exprs_by_idx.set(expected.index(), ExprPtr.global(r));
 }
 
 pub fn getNamePtr(self: *const Parser, idx: u32) ParseError!NamePtr {
-    if (idx < self.names_by_idx.items.len) {
-        const p = self.names_by_idx.items[idx];
-        if (p != NamePtr.nil) return p;
-    }
+    const p = self.names_by_idx.at(idx);
+    if (p != NamePtr.nil) return p;
     return fail("export references name index before it is defined");
 }
 
 pub fn getLevelPtr(self: *const Parser, idx: u32) ParseError!LevelPtr {
-    if (idx < self.levels_by_idx.items.len) {
-        const p = self.levels_by_idx.items[idx];
-        if (p != LevelPtr.nil) return p;
-    }
+    const p = self.levels_by_idx.at(idx);
+    if (p != LevelPtr.nil) return p;
     return fail("export references level index before it is defined");
 }
 
 pub fn getExprPtr(self: *const Parser, idx: u32) ParseError!ExprPtr {
-    if (idx < self.exprs_by_idx.items.len) {
-        const p = self.exprs_by_idx.items[idx];
-        if (p != ExprPtr.nil) return p;
-    }
+    const p = self.exprs_by_idx.at(idx);
+    if (p != ExprPtr.nil) return p;
     return fail("export references expression index before it is defined");
 }
 
