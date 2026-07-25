@@ -11,7 +11,7 @@ const BackRef = parser.BackRef;
 const BinderStyle = expr.BinderStyle;
 const ReducibilityHint = env.ReducibilityHint;
 
-pub const FastError = error{ Fallback, ParseFailed };
+pub const FastError = error{ Fallback, ParseFailed, Declined };
 
 fn NonVoid(comptime types: anytype) []const type {
     comptime var out: []const type = &.{};

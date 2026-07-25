@@ -18,6 +18,7 @@ const RecRule = env.RecRule;
 const Parser = parser.Parser;
 const ParseError = parser.ParseError;
 const fail = parser.fail;
+const decline = parser.decline;
 const Value = json.Value;
 
 const DefinitionSafety = enum { unsafe_, safe, partial };
@@ -117,7 +118,7 @@ fn insertDeclar(self: *Parser, n: NamePtr, d: Declar) ParseError!void {
 pub fn parseAxiom(self: *Parser, ta: std.mem.Allocator, v: Value) ParseError!void {
     const o = try json.asObject(v);
     const is_unsafe = try json.asBool(o.get("isUnsafe") orelse return fail("missing isUnsafe"));
-    if (is_unsafe) return fail("unsafe declarations are not supported");
+    if (is_unsafe) return decline("unsafe declarations are not supported");
     const aname = try item.getNamePtr(self, try json.asU32(o.get("name") orelse return fail("missing name")));
     const uparams = try item.getUparamsPtr(self, ta, try json.asU32Array(ta, o.get("levelParams") orelse return fail("missing levelParams")));
     const ty = try item.getExprPtr(self, try json.asU32(o.get("type") orelse return fail("missing type")));
@@ -125,7 +126,7 @@ pub fn parseAxiom(self: *Parser, ta: std.mem.Allocator, v: Value) ParseError!voi
     const axiom = Declar{ .axiom = .{ .info = info } };
     switch (axiomDecision(self, aname)) {
         .permit => try insertDeclar(self, aname, axiom),
-        .reject => return fail("export file declares unpermitted axiom"),
+        .reject => return decline("export file declares unpermitted axiom"),
         .skip => self.skipped.append(util.smp_allocator, nameToString(self, aname)) catch util.oom(),
     }
 }
@@ -153,7 +154,7 @@ pub fn doThm(self: *Parser, ta: std.mem.Allocator, name_idx: u32, ty_idx: u32, v
 pub fn parseDef(self: *Parser, ta: std.mem.Allocator, v: Value) ParseError!void {
     const o = try json.asObject(v);
     const safety = try parseSafety(o.get("safety") orelse return fail("missing safety"));
-    if (safety != .safe) return fail("unsafe and partial definitions are not supported");
+    if (safety != .safe) return decline("unsafe and partial definitions are not supported");
     try doDef(
         self,
         ta,
@@ -180,7 +181,7 @@ pub fn parseThm(self: *Parser, ta: std.mem.Allocator, v: Value) ParseError!void 
 pub fn parseOpaque(self: *Parser, ta: std.mem.Allocator, v: Value) ParseError!void {
     const o = try json.asObject(v);
     const is_unsafe = try json.asBool(o.get("isUnsafe") orelse return fail("missing isUnsafe"));
-    if (is_unsafe) return fail("unsafe declarations are not supported");
+    if (is_unsafe) return decline("unsafe declarations are not supported");
     const oname = try item.getNamePtr(self, try json.asU32(o.get("name") orelse return fail("missing name")));
     const ty = try item.getExprPtr(self, try json.asU32(o.get("type") orelse return fail("missing type")));
     const val = try item.getExprPtr(self, try json.asU32(o.get("value") orelse return fail("missing value")));
@@ -210,7 +211,7 @@ pub fn parseInductive(self: *Parser, ta: std.mem.Allocator, v: Value) ParseError
     for (ind_vals) |ind_v| {
         const io = try json.asObject(ind_v);
         const is_unsafe = try json.asBool(io.get("isUnsafe") orelse return fail("missing isUnsafe"));
-        if (is_unsafe) return fail("unsafe declarations are not supported");
+        if (is_unsafe) return decline("unsafe declarations are not supported");
         const iname = try item.getNamePtr(self, try json.asU32(io.get("name") orelse return fail("missing name")));
         self.mutual_block_sizes.put(util.smp_allocator, iname, .{ block_start, block_size }) catch util.oom();
         const uparams = try item.getUparamsPtr(self, ta, try json.asU32Array(ta, io.get("levelParams") orelse return fail("missing levelParams")));
@@ -235,7 +236,7 @@ pub fn parseInductive(self: *Parser, ta: std.mem.Allocator, v: Value) ParseError
     for (ctor_vals) |ctor_v| {
         const co = try json.asObject(ctor_v);
         const is_unsafe = try json.asBool(co.get("isUnsafe") orelse return fail("missing isUnsafe"));
-        if (is_unsafe) return fail("unsafe declarations are not supported");
+        if (is_unsafe) return decline("unsafe declarations are not supported");
         const cname = try item.getNamePtr(self, try json.asU32(co.get("name") orelse return fail("missing name")));
         const ty = try item.getExprPtr(self, try json.asU32(co.get("type") orelse return fail("missing type")));
         const uparams = try item.getUparamsPtr(self, ta, try json.asU32Array(ta, co.get("levelParams") orelse return fail("missing levelParams")));
@@ -256,7 +257,7 @@ pub fn parseInductive(self: *Parser, ta: std.mem.Allocator, v: Value) ParseError
     for (rec_vals) |rec_v| {
         const ro = try json.asObject(rec_v);
         const is_unsafe = try json.asBool(ro.get("isUnsafe") orelse return fail("missing isUnsafe"));
-        if (is_unsafe) return fail("unsafe declarations are not supported");
+        if (is_unsafe) return decline("unsafe declarations are not supported");
         const rname = try item.getNamePtr(self, try json.asU32(ro.get("name") orelse return fail("missing name")));
         const ty = try item.getExprPtr(self, try json.asU32(ro.get("type") orelse return fail("missing type")));
         const uparams = try item.getUparamsPtr(self, ta, try json.asU32Array(ta, ro.get("levelParams") orelse return fail("missing levelParams")));

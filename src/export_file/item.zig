@@ -23,6 +23,7 @@ const Parser = parser.Parser;
 const BackRef = parser.BackRef;
 const ParseError = parser.ParseError;
 const fail = parser.fail;
+const decline = parser.decline;
 
 fn resizeOpt(comptime T: type, list: *std.ArrayList(T), new_len: usize, nil: T) void {
     const old_len = list.items.len;
@@ -134,7 +135,7 @@ pub fn doNum(self: *Parser, idx: BackRef, pre: u32, i: u32) ParseError!void {
 
 pub fn doNatVal(self: *Parser, idx: BackRef, s: []const u8) ParseError!void {
     if (!self.config.nat_extension) {
-        return fail("Nat lit extension disallowed by checker execution config, but export file contains a nat literal");
+        return decline("Nat lit extension disallowed by checker execution config, but export file contains a nat literal");
     }
     const big = nat.fromDecimal(s) orelse return fail("invalid BigUint decimal string");
     const num_ptr = BigUintPtr.global(self.dag.bignums.?.intern(self.arena, big));
@@ -143,7 +144,7 @@ pub fn doNatVal(self: *Parser, idx: BackRef, s: []const u8) ParseError!void {
 
 pub fn doStrVal(self: *Parser, idx: BackRef, s: []const u8) ParseError!void {
     if (!self.config.string_extension) {
-        return fail("String lit extension disallowed by checker execution config, but export file contains a string literal");
+        return decline("String lit extension disallowed by checker execution config, but export file contains a string literal");
     }
     const owned = self.arena.dupe(u8, s);
     const string_ptr = StringPtr.global(self.dag.strings.intern(self.arena, owned));
@@ -193,7 +194,7 @@ pub fn doApp(self: *Parser, idx: BackRef, fn_idx: u32, arg_idx: u32) ParseError!
 }
 
 pub fn doBvar(self: *Parser, idx: BackRef, dbj_idx: u16) ParseError!void {
-    if (dbj_idx == std.math.maxInt(u16)) return fail("bvar index too large");
+    if (dbj_idx == std.math.maxInt(u16)) return decline("bvar index exceeds implementation limit");
     pushExpr(self, idx, .mk(.{ .@"var" = .{ .dbj_idx = dbj_idx } }));
 }
 
@@ -238,7 +239,7 @@ pub fn doLet(self: *Parser, idx: BackRef, name_idx: u32, type_idx: u32, value_id
 }
 
 pub fn doProj(self: *Parser, idx: BackRef, ty_name_idx: u32, proj_idx: usize, struct_idx: u32) ParseError!void {
-    if (proj_idx > std.math.maxInt(u16)) return fail("proj index too large");
+    if (proj_idx > std.math.maxInt(u16)) return decline("proj index exceeds implementation limit");
     const ty_name = try getNamePtr(self, ty_name_idx);
     const structure = try getExprPtr(self, struct_idx);
     pushExpr(self, idx, .mk(.{ .proj = .{

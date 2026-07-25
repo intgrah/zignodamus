@@ -34,18 +34,23 @@ fn checkSemver(version: []const u8) ParseError!void {
         return fail("export format version could not be parsed as semver");
     };
     if (export_file_semver.order(min_semver) == .lt) {
-        return fail("export format version is less than the minimum supported version");
+        return decline("export format version is less than the minimum supported version");
     }
     if (export_file_semver.order(max_semver) != .lt) {
-        return fail("export format version is greater than the maximum supported version");
+        return decline("export format version is greater than the maximum supported version");
     }
 }
 
-pub const ParseError = error{ParseFailed};
+pub const ParseError = error{ ParseFailed, Declined };
 
-pub fn fail(msg: []const u8) ParseError {
+pub fn fail(msg: []const u8) error{ParseFailed} {
     std.debug.print("{s}\n", .{msg});
     return error.ParseFailed;
+}
+
+pub fn decline(msg: []const u8) error{Declined} {
+    std.debug.print("declined: {s}\n", .{msg});
+    return error.Declined;
 }
 
 pub const BackRefKind = enum { in_, il, ie };
@@ -219,6 +224,7 @@ fn parseLine(self: *Parser, ta: std.mem.Allocator, line: []const u8) ParseError!
     } else |err| switch (err) {
         error.Fallback => {},
         error.ParseFailed => return error.ParseFailed,
+        error.Declined => return error.Declined,
     }
 
     var json_parser = json.Parser{ .s = line, .i = 0, .a = ta };
@@ -306,7 +312,7 @@ fn parseLine(self: *Parser, ta: std.mem.Allocator, line: []const u8) ParseError!
     }
 
     if (kindv(kind, kv, .mdata) != null) {
-        return fail("Expr.mdata not supported");
+        return decline("Expr.mdata not supported");
     }
 
     if (kindv(kind, kv, .@"const")) |v| {

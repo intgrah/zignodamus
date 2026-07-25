@@ -171,9 +171,9 @@ fn findConstAux(self: *const TcCtx, e: ExprPtr, cl: anytype, pred: anytype, cach
     }
 }
 
-pub fn piTelescopeSize(e_in: ExprPtr) u16 {
+pub fn piTelescopeSize(e_in: ExprPtr) usize {
     var e = e_in;
-    var size: u16 = 0;
+    var size: usize = 0;
     while (true) {
         switch (e.asRef().kind) {
             .pi => |x| {

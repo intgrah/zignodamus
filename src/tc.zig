@@ -78,21 +78,31 @@ pub const TcCache = struct {
     }
 };
 
-pub const Reject = error{CheckFailed};
+pub const Reject = error{ CheckFailed, Declined };
 
 var check_failed = std.atomic.Value(bool).init(false);
+var check_declined = std.atomic.Value(bool).init(false);
 
 pub fn checkingFailed() bool {
     return check_failed.load(.monotonic);
+}
+
+pub fn checkingDeclined() bool {
+    return check_declined.load(.monotonic);
 }
 
 pub fn fail() void {
     check_failed.store(true, .monotonic);
 }
 
-pub fn reject(comptime fmt: []const u8, args: anytype) Reject {
+pub fn reject(comptime fmt: []const u8, args: anytype) error{CheckFailed} {
     std.debug.print("kernel: rejected: " ++ fmt ++ "\n", args);
     return error.CheckFailed;
+}
+
+pub fn decline(comptime fmt: []const u8, args: anytype) error{Declined} {
+    std.debug.print("kernel: declined: " ++ fmt ++ "\n", args);
+    return error.Declined;
 }
 
 pub const TypeChecker = struct {
@@ -133,15 +143,15 @@ fn checkDeclarWith(self: *const ExportFile, d: *const Declar, ar: *Arena, ctx: *
         return inductive.checkInductiveDeclar(self, d);
     }
     if (d.* == .quot) {
-        quot.checkQuot(ctx, ar, d) catch fail();
+        quot.checkQuot(ctx, ar, d) catch |err| reportWithName(d, err);
         return;
     }
     var e = self.newEnv(.{ .by_name = d.info().name });
     var checker = TypeChecker.init(ctx, &e, ar, d.info().*, cache);
     defer checker.deinit();
     switch (d.*) {
-        .theorem, .definition, .opaque_ => inference.checkDefLike(&checker, d) catch failWithName(d),
-        .axiom, .constructor, .recursor => inference.checkDeclarInfo(&checker, d) catch failWithName(d),
+        .theorem, .definition, .opaque_ => inference.checkDefLike(&checker, d) catch |err| reportWithName(d, err),
+        .axiom, .constructor, .recursor => inference.checkDeclarInfo(&checker, d) catch |err| reportWithName(d, err),
         .inductive, .quot => unreachable,
     }
     switch (d.*) {
@@ -159,12 +169,20 @@ fn checkDeclarWith(self: *const ExportFile, d: *const Declar, ar: *Arena, ctx: *
     }
 }
 
-pub fn failWithName(d: *const Declar) void {
+pub fn reportWithName(d: *const Declar, err: Reject) void {
     var buf: [512]u8 = undefined;
     var w = std.Io.Writer.fixed(&buf);
     @import("debug_printer.zig").debugPrint(&w, d.info().name) catch {};
-    std.debug.print("kernel: rejected declaration: {s}\n", .{w.buffered()});
-    fail();
+    switch (err) {
+        error.CheckFailed => {
+            std.debug.print("kernel: rejected declaration: {s}\n", .{w.buffered()});
+            fail();
+        },
+        error.Declined => {
+            std.debug.print("kernel: declined declaration: {s}\n", .{w.buffered()});
+            check_declined.store(true, .monotonic);
+        },
+    }
 }
 
 pub fn checkDeclar(self: *const ExportFile, d: *const Declar) void {

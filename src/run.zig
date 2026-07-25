@@ -75,6 +75,9 @@ pub fn run(io: std.Io, gpa: std.mem.Allocator, options: Options) !void {
     if (tc.checkingFailed()) {
         return error.CheckFailed;
     }
+    if (tc.checkingDeclined()) {
+        return error.Declined;
+    }
 
     if (!options.print_success_message and skipped_axioms.len == 0) return;
 

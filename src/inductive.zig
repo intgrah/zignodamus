@@ -98,9 +98,8 @@ fn lamFold(self: *TypeChecker, binders: []const VBinder, domains: []const ExprPt
     return e;
 }
 
-fn u16TryFrom(x: usize) u16 {
-    if (x > std.math.maxInt(u16)) @panic("u16 overflow");
-    return @intCast(x);
+fn u16TryFrom(x: usize) error{Declined}!u16 {
+    return std.math.cast(u16, x) orelse tc.decline("inductive metadata exceeds implementation limit", .{});
 }
 
 pub fn checkInductiveDeclar(self: *const ExportFile, d: *const Declar) void {
@@ -111,7 +110,7 @@ pub fn checkInductiveDeclar(self: *const ExportFile, d: *const Declar) void {
         },
         else => @panic("expected inductive"),
     };
-    checkInductiveDeclarChecked(self, d, ind, env_limit) catch tc.failWithName(d);
+    checkInductiveDeclarChecked(self, d, ind, env_limit) catch |err| tc.reportWithName(d, err);
 }
 
 fn checkInductiveDeclarChecked(
@@ -171,7 +170,7 @@ fn checkInductiveDeclarChecked(
         }
     }
 
-    const ctor_extension = mkCtorsEnvExt(&ctx, &st, ind_ty_ext1);
+    const ctor_extension = try mkCtorsEnvExt(&ctx, &st, ind_ty_ext1);
 
     const recursors = blk: {
         var e = env.Env.initWithTempExt(&self.declars, &ctor_extension, env_limit);
@@ -238,17 +237,17 @@ fn ctorNamesArc(ctx: *TcCtx, inductive: IndTyHeader) []const NamePtr {
     return names.items;
 }
 
-pub fn mkCtorsEnvExt(ctx: *TcCtx, nest_st: *const InductiveCheckState, env_ext_in: DeclarMap) DeclarMap {
+pub fn mkCtorsEnvExt(ctx: *TcCtx, nest_st: *const InductiveCheckState, env_ext_in: DeclarMap) error{Declined}!DeclarMap {
     var env_ext = env_ext_in;
     for (nest_st.all_inductives_incl_specialized.items) |inductive| {
         for (inductive.ctors.items, 0..) |ctor, idx| {
             const info = DeclarInfo{ .name = ctor.name, .ty = ctor.ty, .uparams = nest_st.uparams };
             const num_params = nest_st.num_params;
-            const num_fields = expr.piTelescopeSize(ctor.ty) - num_params;
+            const num_fields = try u16TryFrom(expr.piTelescopeSize(ctor.ty) - num_params);
             const d = Declar{ .constructor = ConstructorData{
                 .info = info,
                 .inductive_name = inductive.name,
-                .ctor_idx = u16TryFrom(idx),
+                .ctor_idx = try u16TryFrom(idx),
                 .num_params = num_params,
                 .num_fields = num_fields,
             } };
@@ -676,12 +675,12 @@ fn checkInductiveSpecs(self: *TypeChecker, st: *InductiveCheckState) tc.Reject!v
             st.block_codom = block_codom;
             st.is_zero = level.isZero(self.ctx, block_codom);
             st.is_nonzero = level.isNonzero(self.ctx, block_codom);
-            st.index_counts.append(self.ctx.bump, u16TryFrom(it.binders.items.len)) catch util.oom();
+            st.index_counts.append(self.ctx.bump, try u16TryFrom(it.binders.items.len)) catch util.oom();
         } else {
             const it = try openIndices(self, st, st.g, ind.ty);
             const codom_level = try inference.ensureSort(self, it.w.depth, it.codomain);
             util.assert(level.eqAntisymm(self.ctx, codom_level, st.block_codom.?));
-            st.index_counts.append(self.ctx.bump, u16TryFrom(it.binders.items.len)) catch util.oom();
+            st.index_counts.append(self.ctx.bump, try u16TryFrom(it.binders.items.len)) catch util.oom();
         }
         st.ind_names.append(self.ctx.bump, ind.name) catch util.oom();
     }
@@ -1175,10 +1174,10 @@ fn mkRecRule(
     e = lamFold(self, flat_minors, flat_minor_exprs, e);
     e = lamFold(self, st.motives.items, st.motive_ty_exprs.items, e);
     e = lamFold(self, st.params.items, st.param_ty_exprs.items, e);
-    const num_fields = @as(usize, expr.piTelescopeSize(ctor.ty)) - @as(usize, st.num_params);
+    const num_fields = expr.piTelescopeSize(ctor.ty) - @as(usize, st.num_params);
     return RecRule{
         .ctor_name = ctor.name,
-        .ctor_telescope_size_wo_params = u16TryFrom(num_fields),
+        .ctor_telescope_size_wo_params = try u16TryFrom(num_fields),
         .val = e,
     };
 }
@@ -1318,8 +1317,8 @@ pub fn mkRecursors(self: *TypeChecker, st: *InductiveCheckState, occ: *IndOccurs
             .all_inductives = st.ind_names.items,
             .num_params = st.num_params,
             .num_indices = st.index_counts.items[i],
-            .num_motives = u16TryFrom(st.motives.items.len),
-            .num_minors = u16TryFrom(flat_minors.items.len),
+            .num_motives = try u16TryFrom(st.motives.items.len),
+            .num_minors = try u16TryFrom(flat_minors.items.len),
             .rec_rules = rec_rules.items[i].items,
             .is_k = st.k_target.?,
         };

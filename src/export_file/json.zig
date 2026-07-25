@@ -3,6 +3,7 @@ const util = @import("../util.zig");
 const parser = @import("parser.zig");
 const ParseError = parser.ParseError;
 const fail = parser.fail;
+const decline = parser.decline;
 
 pub const Member = struct { key: []const u8, value: Value };
 
@@ -34,7 +35,7 @@ fn parseUint(comptime T: type, s: []const u8) ParseError!T {
         if (c < '0' or c > '9') return fail("expected integer");
         x = x * 10 + (c - '0');
     }
-    return std.math.cast(T, x) orelse fail("integer out of range");
+    return std.math.cast(T, x) orelse decline("integer exceeds implementation limit");
 }
 
 pub fn asU32(v: Value) ParseError!u32 {

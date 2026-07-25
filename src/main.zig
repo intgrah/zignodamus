@@ -27,9 +27,10 @@ const params = clap.parseParamsComptime(
 pub fn main(init: std.process.Init) void {
     mainInner(init) catch |err| switch (err) {
         error.ParseFailed, error.CheckFailed => std.process.exit(1),
+        error.Declined => std.process.exit(2),
         else => {
             std.debug.print("error: {s}\n", .{@errorName(err)});
-            std.process.exit(2);
+            std.process.exit(3);
         },
     };
 }
