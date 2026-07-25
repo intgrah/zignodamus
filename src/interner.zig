@@ -20,13 +20,26 @@ fn Interner(comptime T: type) type {
         growth_left: usize = 0,
 
         const Self = @This();
-        const Slot = *const T;
+        const Slot = usize;
         const Group = @Vector(16, u8);
         const ctrl_empty: u8 = 0x80;
+        const addr_bits: usize = (1 << 48) - 1;
         var dummy_ctrl: [16]u8 = .{ctrl_empty} ** 16;
 
         inline fn h2(h: u64) u8 {
             return @as(u8, @truncate(h >> 57)) & 0x7f;
+        }
+
+        inline fn slotOfRef(h: u64, r: *const T) Slot {
+            return @intFromPtr(r) | (@as(usize, @truncate(h >> 41)) << 48);
+        }
+
+        inline fn refOfSlot(s: Slot) *const T {
+            return @ptrFromInt(s & addr_bits);
+        }
+
+        inline fn slotMatches(s: Slot, tagged: Slot, r: *const T) bool {
+            return (s ^ tagged) >> 48 == 0 and refEql(T, refOfSlot(s), r);
         }
         fn maxLoad(c: usize) usize {
             return c - (c >> 3);
@@ -66,7 +79,7 @@ fn Interner(comptime T: type) type {
                 if (empties != 0) {
                     const i = (pos + @ctz(empties)) & mask;
                     self.setCtrl(i, f);
-                    self.slots[i] = r;
+                    self.slots[i] = slotOfRef(h, r);
                     self.count += 1;
                     self.growth_left -= 1;
                     return;
@@ -89,7 +102,10 @@ fn Interner(comptime T: type) type {
             self.growth_left = maxLoad(newcap);
             var i: usize = 0;
             while (i < old_cap) : (i += 1) {
-                if (old_ctrl[i] & 0x80 == 0) self.place(getHashOf(T, old_slots[i]), old_slots[i]);
+                if (old_ctrl[i] & 0x80 == 0) {
+                    const r = refOfSlot(old_slots[i]);
+                    self.place(getHashOf(T, r), r);
+                }
             }
             if (old_cap != 0) {
                 smp_allocator.free(@as([*]align(@alignOf(Slot)) u8, @alignCast(old_ctrl))[0..bufLen(old_cap)]);
@@ -104,6 +120,7 @@ fn Interner(comptime T: type) type {
             if (self.cap == 0) return null;
             const h = getHashOf(T, v);
             const f = h2(h);
+            const tagged = slotOfRef(h, v);
             const mask = self.cap - 1;
             var pos: usize = @intCast(h & mask);
             var stride: usize = 16;
@@ -112,7 +129,7 @@ fn Interner(comptime T: type) type {
                 var m = matchByte(g, f);
                 while (m != 0) {
                     const i = (pos + @ctz(m)) & mask;
-                    if (refEql(T, self.slots[i], v)) return self.slots[i];
+                    if (slotMatches(self.slots[i], tagged, v)) return refOfSlot(self.slots[i]);
                     m &= m - 1;
                 }
                 if (matchByte(g, ctrl_empty) != 0) return null;
@@ -142,8 +159,9 @@ fn Interner(comptime T: type) type {
             return r;
         }
 
-        inline fn placeUniqueRef(self: *Self, h: u64, r: Slot) void {
+        inline fn placeUniqueRef(self: *Self, h: u64, r: *const T) void {
             const f = h2(h);
+            const tagged = slotOfRef(h, r);
             const mask = self.cap - 1;
             var pos: usize = @intCast(h & mask);
             var stride: usize = 16;
@@ -152,14 +170,14 @@ fn Interner(comptime T: type) type {
                 var m = matchByte(g, f);
                 while (m != 0) {
                     const i = (pos + @ctz(m)) & mask;
-                    if (refEql(T, self.slots[i], r)) @panic("Attempted to insert duplicate");
+                    if (slotMatches(self.slots[i], tagged, r)) @panic("Attempted to insert duplicate");
                     m &= m - 1;
                 }
                 const empties = matchByte(g, ctrl_empty);
                 if (empties != 0) {
                     const i = (pos + @ctz(empties)) & mask;
                     self.setCtrl(i, f);
-                    self.slots[i] = r;
+                    self.slots[i] = tagged;
                     self.count += 1;
                     self.growth_left -= 1;
                     return;
@@ -169,7 +187,7 @@ fn Interner(comptime T: type) type {
             }
         }
 
-        pub const BuildEntry = struct { hash: u64, ref: Slot };
+        pub const BuildEntry = struct { hash: u64, ref: *const T };
 
         pub fn buildUnique(self: *Self, entries: []BuildEntry) void {
             std.debug.assert(self.count == 0);
