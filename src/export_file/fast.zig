@@ -88,7 +88,7 @@ const Cur = struct {
                     c.i += 1;
                     return r;
                 },
-                '\\' => return error.Fallback,
+                '\\', '\n' => return error.Fallback,
                 else => {},
             }
         }
@@ -171,7 +171,8 @@ const Cur = struct {
     }
 
     fn done(c: *Cur) error{Fallback}!void {
-        if (c.i != c.len) return error.Fallback;
+        if (c.i >= c.len or c.padded[c.i] != '\n') return error.Fallback;
+        c.i += 1;
     }
 
     fn match(c: *Cur, ta: std.mem.Allocator, comptime pattern: []const u8, comptime types: anytype) error{Fallback}!Match(types) {
@@ -199,7 +200,7 @@ const Cur = struct {
     }
 };
 
-pub fn fastLine(self: *Parser, ta: std.mem.Allocator, padded: []const u8, len: usize) FastError!void {
+pub fn fastLine(self: *Parser, ta: std.mem.Allocator, padded: []const u8, len: usize) FastError!usize {
     if (len < 8) return error.Fallback;
     var c = Cur{ .padded = padded, .len = len, .i = 0 };
     switch (padded[2]) {
@@ -349,4 +350,5 @@ pub fn fastLine(self: *Parser, ta: std.mem.Allocator, padded: []const u8, len: u
         },
         else => return error.Fallback,
     }
+    return c.i;
 }

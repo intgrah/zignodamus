@@ -168,17 +168,17 @@ fn parseRegion(
     var next_reclaim: usize = RECLAIM_WINDOW;
     var off: usize = 0;
     while (off < body_len) {
-        const nl = std.mem.indexOfScalarPos(u8, base[0..body_len], off, '\n') orelse body_len;
-        if (nl != off) {
-            if (reclaim and off >= next_reclaim) {
-                dropped = reclaimConsumed(base, dropped, off);
-                next_reclaim = off + RECLAIM_WINDOW;
-            }
-            defer scratch.release(scratch_mark);
-            try parseLine(self, ta, base[off..], nl - off);
-            self.line_num += 1;
+        if (base[off] == '\n') {
+            off += 1;
+            continue;
         }
-        off = nl + 1;
+        if (reclaim and off >= next_reclaim) {
+            dropped = reclaimConsumed(base, dropped, off);
+            next_reclaim = off + RECLAIM_WINDOW;
+        }
+        defer scratch.release(scratch_mark);
+        off += try parseLine(self, ta, base[off..], body_len - off);
+        self.line_num += 1;
     }
 }
 
@@ -283,16 +283,18 @@ fn parseBinderStyle(v: Value) ParseError!BinderStyle {
     return item.binderStyleOf(try json.asStr(v)) orelse fail("unknown binderInfo");
 }
 
-fn parseLine(self: *Parser, ta: std.mem.Allocator, base: []const u8, len: usize) ParseError!void {
-    if (fast.fastLine(self, ta, base, len)) |_| {
-        return;
+fn parseLine(self: *Parser, ta: std.mem.Allocator, base: []const u8, len: usize) ParseError!usize {
+    if (fast.fastLine(self, ta, base, len)) |consumed| {
+        return consumed;
     } else |err| switch (err) {
         error.Fallback => {},
         error.ParseFailed => return error.ParseFailed,
         error.Declined => return error.Declined,
     }
 
-    return slowLine(self, ta, base[0..len]);
+    const line_len = std.mem.indexOfScalar(u8, base[0..len], '\n') orelse len;
+    try slowLine(self, ta, base[0..line_len]);
+    return line_len + @intFromBool(line_len < len);
 }
 
 fn slowLine(self: *Parser, ta: std.mem.Allocator, line: []const u8) ParseError!void {
