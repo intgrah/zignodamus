@@ -81,7 +81,7 @@ pub const Parser = struct {
 
     pub fn init(ar: *Arena, config: Config, input_len: usize) Parser {
         var dag = Dag.init(&config);
-        const anon = NamePtr.global(dag.names.intern(ar, Name.anon));
+        const anon = NamePtr.global(ar.alloc(Name, Name.anon));
         const zero = LevelPtr.global(dag.levels.intern(ar, Level.zero));
         var names_by_idx = IndexArray(NamePtr).init(input_len / 128);
         names_by_idx.set(0, anon);
@@ -117,6 +117,7 @@ fn reclaimConsumed(input: []const u8, dropped: usize, consumed: usize) usize {
 }
 
 const ExprEntry = interner.ExprInterner.BuildEntry;
+const NameEntry = interner.NameInterner.BuildEntry;
 
 fn compactEntries(slots: []expr.Child) []ExprEntry {
     comptime std.debug.assert(@sizeOf(ExprEntry) == @sizeOf(expr.Child));
@@ -130,6 +131,19 @@ fn compactEntries(slots: []expr.Child) []ExprEntry {
         n += 1;
     }
     return out[0..n];
+}
+
+fn buildNameTable(dag: *Dag, slots: []NamePtr) void {
+    const entries = util.smp_allocator.alloc(NameEntry, slots.len) catch util.oom();
+    defer util.smp_allocator.free(entries);
+    var n: usize = 0;
+    for (slots) |p| {
+        if (p == NamePtr.nil) continue;
+        const r = p.asRef();
+        entries[n] = .{ .hash = r.hash, .ref = r };
+        n += 1;
+    }
+    dag.names.buildUnique(entries[0..n]);
 }
 
 pub fn parseExportFile(ar: *Arena, input: []const u8, config: Config) ParseError!struct { ExportFile, []const []const u8 } {
@@ -154,6 +168,7 @@ pub fn parseExportFile(ar: *Arena, input: []const u8, config: Config) ParseError
         parser.line_num += 1;
     }
 
+    buildNameTable(&parser.dag, parser.names_by_idx.slice());
     parser.names_by_idx.deinit();
     parser.levels_by_idx.deinit();
     parser.dag.exprs.buildUnique(compactEntries(parser.exprs_by_idx.slice()));

@@ -27,7 +27,7 @@ const fail = parser.fail;
 const decline = parser.decline;
 
 fn pushName(self: *Parser, expected: BackRef, n: Name) void {
-    self.names_by_idx.set(expected.index(), NamePtr.global(self.dag.names.insertUnique(self.arena, n)));
+    self.names_by_idx.set(expected.index(), NamePtr.global(self.arena.alloc(Name, n)));
 }
 
 fn pushLevel(self: *Parser, expected: BackRef, l: Level) void {
