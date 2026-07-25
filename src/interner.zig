@@ -142,7 +142,7 @@ fn Interner(comptime T: type) type {
             return r;
         }
 
-        fn placeUniqueRef(self: *Self, h: u64, r: Slot) void {
+        inline fn placeUniqueRef(self: *Self, h: u64, r: Slot) void {
             const f = h2(h);
             const mask = self.cap - 1;
             var pos: usize = @intCast(h & mask);
@@ -169,39 +169,81 @@ fn Interner(comptime T: type) type {
             }
         }
 
-        pub const BuildEntry = struct { hash: u64, ref: Slot };
+        const BuildEntry = struct { hash: u64, ref: Slot };
 
-        pub fn buildUnique(self: *Self, entries: []BuildEntry) void {
+        pub fn buildUnique(self: *Self, entries: []Slot) void {
             std.debug.assert(self.count == 0);
             if (entries.len == 0) return;
             var newcap: usize = 16;
             while (maxLoad(newcap) < entries.len) newcap *= 2;
             self.allocCap(newcap);
-            const bits: usize = @ctz(newcap);
-            const scratch = smp_allocator.alloc(BuildEntry, entries.len) catch util.oom();
-            defer smp_allocator.free(scratch);
-            var src: []BuildEntry = entries;
-            var dst: []BuildEntry = scratch;
-            var shift: usize = 0;
-            while (shift < bits) : (shift += 8) {
-                var counts = [_]usize{0} ** 256;
-                for (src) |e| counts[@as(usize, @intCast((e.hash >> @intCast(shift)) & 0xff))] += 1;
-                var sum: usize = 0;
-                for (&counts) |*c| {
-                    const t = c.*;
-                    c.* = sum;
-                    sum += t;
-                }
-                for (src) |e| {
-                    const d: usize = @intCast((e.hash >> @intCast(shift)) & 0xff);
-                    dst[counts[d]] = e;
-                    counts[d] += 1;
-                }
-                const tmp = src;
-                src = dst;
-                dst = tmp;
+            const bits: u6 = @intCast(@ctz(newcap));
+            if (bits <= 8) {
+                for (entries) |r| self.placeUniqueRef(getHashOf(T, r), r);
+                return;
             }
-            for (src) |e| self.placeUniqueRef(e.hash, e.ref);
+            const shift: u6 = bits - 8;
+            const keys = smp_allocator.alloc(u8, entries.len) catch util.oom();
+            defer smp_allocator.free(keys);
+            var counts = [_]usize{0} ** 256;
+            for (entries, keys) |r, *k| {
+                k.* = @truncate(getHashOf(T, r) >> shift);
+                counts[k.*] += 1;
+            }
+            var next: [256]usize = undefined;
+            var ends: [256]usize = undefined;
+            var max_count: usize = 0;
+            var sum: usize = 0;
+            for (counts, 0..) |c, b| {
+                next[b] = sum;
+                sum += c;
+                ends[b] = sum;
+                max_count = @max(max_count, c);
+            }
+            for (0..256) |b| {
+                var i = next[b];
+                while (i < ends[b]) {
+                    const k = keys[i];
+                    if (k == @as(u8, @intCast(b))) {
+                        i += 1;
+                        continue;
+                    }
+                    const j = next[k];
+                    std.mem.swap(Slot, &entries[i], &entries[j]);
+                    std.mem.swap(u8, &keys[i], &keys[j]);
+                    next[k] = j + 1;
+                }
+            }
+            const pair_a = smp_allocator.alloc(BuildEntry, max_count) catch util.oom();
+            defer smp_allocator.free(pair_a);
+            const pair_b = smp_allocator.alloc(BuildEntry, max_count) catch util.oom();
+            defer smp_allocator.free(pair_b);
+            var bucket_start: usize = 0;
+            for (counts) |c| {
+                const bucket = entries[bucket_start .. bucket_start + c];
+                bucket_start += c;
+                for (bucket, pair_a[0..c]) |r, *p| p.* = .{ .hash = getHashOf(T, r), .ref = r };
+                var src: []BuildEntry = pair_a[0..c];
+                if (shift > 8) {
+                    const dst: []BuildEntry = pair_b[0..c];
+                    const sh: u6 = shift - 8;
+                    var pass = [_]usize{0} ** 256;
+                    for (src) |e| pass[@as(usize, @intCast((e.hash >> sh) & 0xff))] += 1;
+                    var acc: usize = 0;
+                    for (&pass) |*p| {
+                        const t = p.*;
+                        p.* = acc;
+                        acc += t;
+                    }
+                    for (src) |e| {
+                        const d: usize = @intCast((e.hash >> sh) & 0xff);
+                        dst[pass[d]] = e;
+                        pass[d] += 1;
+                    }
+                    src = dst;
+                }
+                for (src) |e| self.placeUniqueRef(e.hash, e.ref);
+            }
         }
 
         pub fn deinit(self: *Self) void {

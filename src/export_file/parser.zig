@@ -73,7 +73,7 @@ pub const Parser = struct {
     names_by_idx: std.ArrayList(NamePtr),
     levels_by_idx: std.ArrayList(LevelPtr),
     exprs_by_idx: std.ArrayList(ExprPtr),
-    pending_exprs: std.ArrayList(interner.ExprInterner.BuildEntry),
+    pending_exprs: std.ArrayList(*const expr.Expr),
     declars: env.DeclarMap,
     config: Config,
     skipped: std.ArrayList([]const u8),
@@ -136,11 +136,11 @@ pub fn parseExportFile(ar: *Arena, input: []const u8, config: Config) ParseError
         parser.line_num += 1;
     }
 
-    parser.dag.exprs.buildUnique(parser.pending_exprs.items);
-    parser.pending_exprs.deinit(util.smp_allocator);
     parser.names_by_idx.deinit(util.smp_allocator);
     parser.levels_by_idx.deinit(util.smp_allocator);
     parser.exprs_by_idx.deinit(util.smp_allocator);
+    parser.dag.exprs.buildUnique(parser.pending_exprs.items);
+    parser.pending_exprs.deinit(util.smp_allocator);
 
     const name_cache = parser.dag.mkNameCache(parser.anon);
     const export_file = ExportFile{

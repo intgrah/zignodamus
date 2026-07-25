@@ -50,7 +50,7 @@ fn pushLevel(self: *Parser, expected: BackRef, l: Level) void {
 fn pushExpr(self: *Parser, expected: BackRef, e: Expr) void {
     const r = self.arena.create(Expr);
     r.* = e;
-    self.pending_exprs.append(util.smp_allocator, .{ .hash = e.hash, .ref = r }) catch util.oom();
+    self.pending_exprs.append(util.smp_allocator, r) catch util.oom();
     const i = @as(usize, expected.index());
     if (i >= self.exprs_by_idx.items.len) {
         resizeOpt(ExprPtr, &self.exprs_by_idx, i + 1, ExprPtr.nil);
