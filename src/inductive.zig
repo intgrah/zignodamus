@@ -365,7 +365,7 @@ const IndOccurs = struct {
     }
 
     fn inClosure(self: *IndOccurs, tcr: *TypeChecker, depth: u32, clo: value.Closure) bool {
-        return self.inExpr(tcr, clo.body) or self.inEnv(tcr, depth, clo.env, clo.body);
+        return self.inExpr(tcr, clo.body()) or self.inEnv(tcr, depth, clo.env, clo.body());
     }
 
     fn inExpr(self: *IndOccurs, tcr: *TypeChecker, ex: ExprPtr) bool {

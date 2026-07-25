@@ -202,24 +202,14 @@ pub fn doLam(self: *Parser, idx: BackRef, name_idx: u32, type_idx: u32, body_idx
     const binder_name = try getNamePtr(self, name_idx);
     const binder_type = try getExprPtr(self, type_idx);
     const body = try getExprPtr(self, body_idx);
-    pushExpr(self, idx, .mk(.{ .lambda = .{
-        .binder_name = binder_name,
-        .binder_style = style,
-        .binder_type = binder_type,
-        .body = body,
-    } }));
+    pushExpr(self, idx, .mk(.{ .lambda = .mk(binder_name, style, binder_type, body) }));
 }
 
 pub fn doPi(self: *Parser, idx: BackRef, name_idx: u32, type_idx: u32, body_idx: u32, style: BinderStyle) ParseError!void {
     const binder_name = try getNamePtr(self, name_idx);
     const binder_type = try getExprPtr(self, type_idx);
     const body = try getExprPtr(self, body_idx);
-    pushExpr(self, idx, .mk(.{ .pi = .{
-        .binder_name = binder_name,
-        .binder_style = style,
-        .binder_type = binder_type,
-        .body = body,
-    } }));
+    pushExpr(self, idx, .mk(.{ .pi = .mk(binder_name, style, binder_type, body) }));
 }
 
 pub fn doLet(self: *Parser, idx: BackRef, name_idx: u32, type_idx: u32, value_idx: u32, body_idx: u32, nondep: bool) ParseError!void {

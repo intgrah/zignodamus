@@ -222,8 +222,8 @@ inline fn mkLamHc(
     binder_type: ExprPtr,
     body: Closure,
 ) V {
-    std.debug.assert(body.kind == .eval);
-    const key = .{ binder_type, @intFromPtr(body.env), body.body };
+    std.debug.assert(body.kind() == .eval);
+    const key = .{ binder_type, @intFromPtr(body.env), body.body() };
     const gop = self.tc_cache.lam_hc.getOrPut(util.smp_allocator, key) catch util.oom();
     if (gop.found_existing) return gop.value_ptr.*;
     const v = value.mkLam(self.arena, binder_name, binder_style, binder_type, body);
@@ -297,7 +297,7 @@ inline fn mkPiHc(
     domain: V,
     body: Closure,
 ) V {
-    const key = .{ @intFromPtr(domain), @intFromPtr(body.env), body.body, @intFromEnum(body.kind), @intFromPtr(body.ctx) };
+    const key = .{ @intFromPtr(domain), @intFromPtr(body.env), body.raw(), @intFromPtr(body.ctx) };
     const gop = self.tc_cache.pi_hc.getOrPut(util.smp_allocator, key) catch util.oom();
     if (gop.found_existing) return gop.value_ptr.*;
     const v = value.mkPi(self.arena, binder_name, binder_style, domain, body);
@@ -449,7 +449,7 @@ fn evalNoCache(self: *TypeChecker, depth: u32, e: E, ex: ExprPtr) V {
             const clo = f.lam.body;
             const a = if (trivial) eval(self, depth, e, arg) else mkThunkHc(self, e, arg);
             const clo_env = clo.env;
-            const clo_body = clo.body;
+            const clo_body = clo.body();
             const new_env = value.envExtend(self.arena, clo_env, a);
             return eval(self, depth, new_env, clo_body);
         }
@@ -470,13 +470,14 @@ fn evalNoCache(self: *TypeChecker, depth: u32, e: E, ex: ExprPtr) V {
             return evalConst(self, c.name, levels);
         },
         .app => unreachable,
-        .lambda => |l| return value.mkLam(self.arena, l.binder_name, l.binder_style, l.binder_type, Closure{ .env = keyEnv(self, e, ex), .body = l.body }),
+        .lambda => |l| return value.mkLam(self.arena, l.binder_name, l.binderStyle(), l.binderType(), Closure.mkEval(keyEnv(self, e, ex), l.body)),
         .pi => |p| {
-            const dom = switch (p.binder_type.asRef().kind) {
-                .@"var", .sort, .@"const", .nat_lit, .string_lit => eval(self, depth, e, p.binder_type),
-                else => mkThunkHc(self, e, p.binder_type),
+            const binder_type = p.binderType();
+            const dom = switch (binder_type.asRef().kind) {
+                .@"var", .sort, .@"const", .nat_lit, .string_lit => eval(self, depth, e, binder_type),
+                else => mkThunkHc(self, e, binder_type),
             };
-            return value.mkPi(self.arena, p.binder_name, p.binder_style, dom, Closure{ .env = keyEnv(self, e, ex), .body = p.body });
+            return value.mkPi(self.arena, p.binder_name, p.binderStyle(), dom, Closure.mkEval(keyEnv(self, e, ex), p.body));
         },
         .let => {
             var cur_env = e;
@@ -592,7 +593,7 @@ pub inline fn apply(self: *TypeChecker, depth: u32, f: V, a: V) V {
     switch (f.*) {
         .lam => |l| {
             const clo_env = l.body.env;
-            const clo_body = l.body.body;
+            const clo_body = l.body.body();
             const e = value.envExtend(self.arena, clo_env, a);
             return eval(self, depth, e, clo_body);
         },
@@ -634,11 +635,11 @@ pub inline fn apply(self: *TypeChecker, depth: u32, f: V, a: V) V {
 
 pub fn applyClosure(self: *TypeChecker, depth: u32, clo: *const Closure, v: V, binder_ty: ?V) V {
     const e = value.envExtend(self.arena, clo.env, v);
-    switch (clo.kind) {
-        .eval => return eval(self, depth, e, clo.body),
+    switch (clo.kind()) {
+        .eval => return eval(self, depth, e, clo.body()),
         .infer => {
             const c = value.ctxExtend(self.arena, clo.ctx, binder_ty orelse @panic("apply_closure: infer closure without binder type"));
-            return inference.infer(self, .InferOnly, depth, e, c, clo.body) catch @panic("infer failed in closure application");
+            return inference.infer(self, .InferOnly, depth, e, c, clo.body()) catch @panic("infer failed in closure application");
         },
     }
 }

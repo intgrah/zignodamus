@@ -19,11 +19,31 @@ pub const S = *const Spine;
 
 pub const Closure = struct {
     env: E,
-    body: ExprPtr,
-    kind: Kind = .eval,
-    ctx: C = &Ctx.nil,
+    ctx: C,
+    /// Body expression, with Kind in the ExprPtr holder tag
+    tagged_body: ExprPtr,
 
-    pub const Kind = enum { eval, infer };
+    pub const Kind = enum(u2) { eval, infer };
+
+    pub fn mk(env: E, b: ExprPtr, k: Kind, ctx: C) Closure {
+        return .{ .env = env, .ctx = ctx, .tagged_body = b.withTag(@intFromEnum(k)) };
+    }
+
+    pub fn mkEval(env: E, b: ExprPtr) Closure {
+        return mk(env, b, .eval, &Ctx.nil);
+    }
+
+    pub fn body(self: Closure) ExprPtr {
+        return self.tagged_body.untag();
+    }
+
+    pub fn raw(self: Closure) ExprPtr {
+        return self.tagged_body;
+    }
+
+    pub fn kind(self: Closure) Kind {
+        return @enumFromInt(self.tagged_body.tag());
+    }
 };
 
 pub const NameLevels = struct { name: NamePtr, levels: LevelsPtr };

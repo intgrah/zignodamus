@@ -20,11 +20,34 @@ const FxHashMap = swiss_map.FxHashMap;
 
 const kindHash = @import("hash.zig").kindHash;
 
-pub const BinderStyle = enum {
+pub const BinderStyle = enum(u2) {
     default,
     implicit,
     strict_implicit,
     instance_implicit,
+};
+
+pub const Binder = struct {
+    binder_name: NamePtr,
+    /// Binder type, with BinderStyle in the ExprPtr holder tag
+    tagged_type: ExprPtr,
+    body: ExprPtr,
+
+    pub fn mk(binder_name: NamePtr, style: BinderStyle, binder_type: ExprPtr, body: ExprPtr) Binder {
+        return .{
+            .binder_name = binder_name,
+            .tagged_type = binder_type.withTag(@intFromEnum(style)),
+            .body = body,
+        };
+    }
+
+    pub fn binderType(self: Binder) ExprPtr {
+        return self.tagged_type.untag();
+    }
+
+    pub fn binderStyle(self: Binder) BinderStyle {
+        return @enumFromInt(self.tagged_type.tag());
+    }
 };
 
 pub const LetData = struct {
@@ -67,18 +90,8 @@ pub const Expr = struct {
             fun: ExprPtr,
             arg: ExprPtr,
         },
-        pi: struct {
-            binder_name: NamePtr,
-            binder_style: BinderStyle,
-            binder_type: ExprPtr,
-            body: ExprPtr,
-        },
-        lambda: struct {
-            binder_name: NamePtr,
-            binder_style: BinderStyle,
-            binder_type: ExprPtr,
-            body: ExprPtr,
-        },
+        pi: Binder,
+        lambda: Binder,
         let: struct {
             data: *const LetData,
         },
@@ -161,8 +174,8 @@ fn findConstAux(self: *const TcCtx, e: ExprPtr, cl: anytype, pred: anytype, cach
             .@"var", .sort, .nat_lit, .string_lit => false,
             .@"const" => |x| pred(cl, x.name),
             .app => |x| findConstAux(self, x.fun, cl, pred, cache) or findConstAux(self, x.arg, cl, pred, cache),
-            .pi => |x| findConstAux(self, x.binder_type, cl, pred, cache) or findConstAux(self, x.body, cl, pred, cache),
-            .lambda => |x| findConstAux(self, x.binder_type, cl, pred, cache) or findConstAux(self, x.body, cl, pred, cache),
+            .pi => |x| findConstAux(self, x.binderType(), cl, pred, cache) or findConstAux(self, x.body, cl, pred, cache),
+            .lambda => |x| findConstAux(self, x.binderType(), cl, pred, cache) or findConstAux(self, x.body, cl, pred, cache),
             .let => |x| findConstAux(self, x.data.binder_type, cl, pred, cache) or findConstAux(self, x.data.val, cl, pred, cache) or findConstAux(self, x.data.body, cl, pred, cache),
             .proj => |x| findConstAux(self, x.structure, cl, pred, cache),
         };
@@ -211,7 +224,7 @@ pub fn getNthPiBinder(e_in: ExprPtr, n: usize) ?ExprPtr {
         }
     }
     switch (e.asRef().kind) {
-        .pi => |x| return x.binder_type,
+        .pi => |x| return x.binderType(),
         else => return null,
     }
 }
@@ -245,8 +258,8 @@ fn maskOf(kind: Expr.Kind) u64 {
     return switch (kind) {
         .@"var" => |x| if (x.dbj_idx < 64) @as(u64, 1) << @intCast(x.dbj_idx) else 0,
         .app => |x| childMask(x.fun) | childMask(x.arg),
-        .pi => |x| childMask(x.binder_type) | bodyMask(x.body),
-        .lambda => |x| childMask(x.binder_type) | bodyMask(x.body),
+        .pi => |x| childMask(x.binderType()) | bodyMask(x.body),
+        .lambda => |x| childMask(x.binderType()) | bodyMask(x.body),
         .let => |x| childMask(x.data.binder_type) | childMask(x.data.val) | bodyMask(x.data.body),
         .proj => |x| childMask(x.structure),
         .sort, .@"const", .string_lit, .nat_lit => 0,
@@ -260,8 +273,8 @@ pub fn hasLooseBvar(e: ExprPtr, idx: u16) bool {
     return switch (e.asRef().kind) {
         .@"var" => |x| x.dbj_idx == idx,
         .app => |x| hasLooseBvar(x.fun, idx) or hasLooseBvar(x.arg, idx),
-        .pi => |x| hasLooseBvar(x.binder_type, idx) or hasLooseBvar(x.body, idx + 1),
-        .lambda => |x| hasLooseBvar(x.binder_type, idx) or hasLooseBvar(x.body, idx + 1),
+        .pi => |x| hasLooseBvar(x.binderType(), idx) or hasLooseBvar(x.body, idx + 1),
+        .lambda => |x| hasLooseBvar(x.binderType(), idx) or hasLooseBvar(x.body, idx + 1),
         .let => |x| hasLooseBvar(x.data.binder_type, idx) or hasLooseBvar(x.data.val, idx) or hasLooseBvar(x.data.body, idx + 1),
         .proj => |x| hasLooseBvar(x.structure, idx),
         .sort, .@"const", .string_lit, .nat_lit => false,

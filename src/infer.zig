@@ -151,24 +151,19 @@ pub fn infer(self: *TypeChecker, comptime flag: InferFlag, depth: u32, e: E, c: 
     const r = switch (ex.asRef().kind) {
         .app => try inferApp(self, flag, depth, e, c, ex),
         .lambda => |l| blk: {
-            const dom = argValue(self, depth, e, l.binder_type);
+            const dom = argValue(self, depth, e, l.binderType());
             if (flag == .Check) {
-                _ = try inferSortOf(self, flag, depth, e, c, l.binder_type);
+                _ = try inferSortOf(self, flag, depth, e, c, l.binderType());
                 const fresh = eval.mkBvarHc(self, depth, dom);
                 const e2 = value.envExtend(self.arena, e, fresh);
                 const c2 = value.ctxExtend(self.arena, c, dom);
                 _ = try infer(self, flag, depth + 1, e2, c2, l.body);
             }
-            break :blk value.mkPi(self.arena, l.binder_name, l.binder_style, dom, Closure{
-                .env = eval.keyEnv(self, e, ex),
-                .body = l.body,
-                .kind = .infer,
-                .ctx = c,
-            });
+            break :blk value.mkPi(self.arena, l.binder_name, l.binderStyle(), dom, Closure.mk(eval.keyEnv(self, e, ex), l.body, .infer, c));
         },
         .pi => |p| blk: {
-            const l1 = try inferSortOf(self, flag, depth, e, c, p.binder_type);
-            const dom = argValue(self, depth, e, p.binder_type);
+            const l1 = try inferSortOf(self, flag, depth, e, c, p.binderType());
+            const dom = argValue(self, depth, e, p.binderType());
             const fresh = eval.mkBvarHc(self, depth, dom);
             const e2 = value.envExtend(self.arena, e, fresh);
             const c2 = value.ctxExtend(self.arena, c, dom);
@@ -213,8 +208,8 @@ fn inferApp(self: *TypeChecker, comptime flag: InferFlag, depth: u32, e: E, c: C
                         return tc.reject("app arg def_eq failed", .{});
                     }
                 }
-                if (p.body.kind == .eval and p.body.body.numLooseBvars() == 0) {
-                    fty = eval.eval(self, depth, p.body.env, p.body.body);
+                if (p.body.kind() == .eval and p.body.body().numLooseBvars() == 0) {
+                    fty = eval.eval(self, depth, p.body.env, p.body.body());
                 } else {
                     const av = argValue(self, depth, e, arg);
                     fty = eval.applyClosure(self, depth, &fty_f.pi.body, av, p.domain);
@@ -271,7 +266,7 @@ fn inferProj(
             const cf = eval.forceAll(self, depth, cur);
             switch (cf.*) {
                 .pi => |p| {
-                    if (expr.hasLooseBvar(p.body.body, 0)) {
+                    if (expr.hasLooseBvar(p.body.body(), 0)) {
                         if (struct_ty_is_prop and !conv.isPropType(self, depth, p.domain)) {
                             return tc.reject("projection of a non-proof field from a Prop structure", .{});
                         }

@@ -249,7 +249,7 @@ fn convDirect(self: *TypeChecker, comptime mode: Mode, depth: u32, t: V, t2: V) 
     switch (t.*) {
         .pi => |bx_pi| switch (t2.*) {
             .pi => |by_pi| {
-                if (bx_pi.body.body == by_pi.body.body and bx_pi.domain == by_pi.domain and bx_pi.body.kind == by_pi.body.kind and envsPtrEqual(bx_pi.body.env, by_pi.body.env)) {
+                if (bx_pi.body.raw() == by_pi.body.raw() and bx_pi.domain == by_pi.domain and envsPtrEqual(bx_pi.body.env, by_pi.body.env)) {
                     return true;
                 }
                 if (!conv(self, mode, depth, bx_pi.domain, by_pi.domain)) {
@@ -265,7 +265,7 @@ fn convDirect(self: *TypeChecker, comptime mode: Mode, depth: u32, t: V, t2: V) 
         },
         .lam => |bx_lam| switch (t2.*) {
             .lam => |by_lam| {
-                if (bx_lam.body.body == by_lam.body.body and envsPtrEqual(bx_lam.body.env, by_lam.body.env)) {
+                if (bx_lam.body.raw() == by_lam.body.raw() and envsPtrEqual(bx_lam.body.env, by_lam.body.env)) {
                     return true;
                 }
                 const dx = eval.lamDomain(self, depth, t);

@@ -62,8 +62,8 @@ fn isExprLocalOnly(e: *const expr.Expr) bool {
         .sort => |x| x.level.isLocal(),
         .@"const" => |x| x.name.isLocal() or x.levels.isLocal(),
         .app => |x| x.fun.isLocal() or x.arg.isLocal(),
-        .pi => |x| x.binder_name.isLocal() or x.binder_type.isLocal() or x.body.isLocal(),
-        .lambda => |x| x.binder_name.isLocal() or x.binder_type.isLocal() or x.body.isLocal(),
+        .pi => |x| x.binder_name.isLocal() or x.binderType().isLocal() or x.body.isLocal(),
+        .lambda => |x| x.binder_name.isLocal() or x.binderType().isLocal() or x.body.isLocal(),
         .let => |x| x.data.binder_name.isLocal() or x.data.binder_type.isLocal() or x.data.val.isLocal() or x.data.body.isLocal(),
     };
 }
@@ -200,12 +200,7 @@ pub fn mkLambda(
     binder_type: ExprPtr,
     body: ExprPtr,
 ) ExprPtr {
-    const e: expr.Expr = .mk(.{ .lambda = .{
-        .binder_name = binder_name,
-        .binder_style = binder_style,
-        .binder_type = binder_type,
-        .body = body,
-    } });
+    const e: expr.Expr = .mk(.{ .lambda = .mk(binder_name, binder_style, binder_type, body) });
     return allocExpr(self, &e);
 }
 
@@ -216,12 +211,7 @@ pub fn mkPi(
     binder_type: ExprPtr,
     body: ExprPtr,
 ) ExprPtr {
-    const e: expr.Expr = .mk(.{ .pi = .{
-        .binder_name = binder_name,
-        .binder_style = binder_style,
-        .binder_type = binder_type,
-        .body = body,
-    } });
+    const e: expr.Expr = .mk(.{ .pi = .mk(binder_name, binder_style, binder_type, body) });
     return allocExpr(self, &e);
 }
 
