@@ -169,9 +169,9 @@ fn Interner(comptime T: type) type {
             }
         }
 
-        const BuildEntry = struct { hash: u64, ref: Slot };
+        pub const BuildEntry = struct { hash: u64, ref: Slot };
 
-        pub fn buildUnique(self: *Self, entries: []Slot) void {
+        pub fn buildUnique(self: *Self, entries: []BuildEntry) void {
             std.debug.assert(self.count == 0);
             if (entries.len == 0) return;
             var newcap: usize = 16;
@@ -179,15 +179,15 @@ fn Interner(comptime T: type) type {
             self.allocCap(newcap);
             const bits: u6 = @intCast(@ctz(newcap));
             if (bits <= 8) {
-                for (entries) |r| self.placeUniqueRef(getHashOf(T, r), r);
+                for (entries) |e| self.placeUniqueRef(e.hash, e.ref);
                 return;
             }
             const shift: u6 = bits - 8;
             const keys = smp_allocator.alloc(u8, entries.len) catch util.oom();
             defer smp_allocator.free(keys);
             var counts = [_]usize{0} ** 256;
-            for (entries, keys) |r, *k| {
-                k.* = @truncate(getHashOf(T, r) >> shift);
+            for (entries, keys) |e, *k| {
+                k.* = @truncate(e.hash >> shift);
                 counts[k.*] += 1;
             }
             var next: [256]usize = undefined;
@@ -209,21 +209,18 @@ fn Interner(comptime T: type) type {
                         continue;
                     }
                     const j = next[k];
-                    std.mem.swap(Slot, &entries[i], &entries[j]);
+                    std.mem.swap(BuildEntry, &entries[i], &entries[j]);
                     std.mem.swap(u8, &keys[i], &keys[j]);
                     next[k] = j + 1;
                 }
             }
-            const pair_a = smp_allocator.alloc(BuildEntry, max_count) catch util.oom();
-            defer smp_allocator.free(pair_a);
             const pair_b = smp_allocator.alloc(BuildEntry, max_count) catch util.oom();
             defer smp_allocator.free(pair_b);
             var bucket_start: usize = 0;
             for (counts) |c| {
                 const bucket = entries[bucket_start .. bucket_start + c];
                 bucket_start += c;
-                for (bucket, pair_a[0..c]) |r, *p| p.* = .{ .hash = getHashOf(T, r), .ref = r };
-                var src: []BuildEntry = pair_a[0..c];
+                var src: []BuildEntry = bucket;
                 if (shift > 8) {
                     const dst: []BuildEntry = pair_b[0..c];
                     const sh: u6 = shift - 8;

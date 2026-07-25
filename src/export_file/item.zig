@@ -37,7 +37,6 @@ fn pushLevel(self: *Parser, expected: BackRef, l: Level) void {
 fn pushExpr(self: *Parser, expected: BackRef, e: Expr) void {
     const r = self.arena.create(Expr);
     r.* = e;
-    self.pending_exprs.append(util.smp_allocator, r) catch util.oom();
     self.exprs_by_idx.set(expected.index(), .{ .ptr = ExprPtr.global(r), .fv_mask = e.fv_mask });
 }
 

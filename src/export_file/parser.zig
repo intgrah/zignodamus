@@ -74,7 +74,6 @@ pub const Parser = struct {
     names_by_idx: IndexArray(NamePtr),
     levels_by_idx: IndexArray(LevelPtr),
     exprs_by_idx: IndexArray(expr.Child),
-    pending_exprs: std.ArrayList(*const expr.Expr),
     declars: env.DeclarMap,
     config: Config,
     skipped: std.ArrayList([]const u8),
@@ -97,7 +96,6 @@ pub const Parser = struct {
             .names_by_idx = names_by_idx,
             .levels_by_idx = levels_by_idx,
             .exprs_by_idx = IndexArray(expr.Child).init(input_len / 24),
-            .pending_exprs = .empty,
             .declars = swiss_map.FxIndexMap(NamePtr, Declar).empty,
             .config = config,
             .skipped = .empty,
@@ -116,6 +114,22 @@ fn reclaimConsumed(input: []const u8, dropped: usize, consumed: usize) usize {
     if (end <= start) return dropped;
     std.posix.madvise(@ptrFromInt(start), end - start, std.posix.MADV.DONTNEED) catch return dropped;
     return end - base;
+}
+
+const ExprEntry = interner.ExprInterner.BuildEntry;
+
+fn compactEntries(slots: []expr.Child) []ExprEntry {
+    comptime std.debug.assert(@sizeOf(ExprEntry) == @sizeOf(expr.Child));
+    comptime std.debug.assert(@alignOf(ExprEntry) <= @alignOf(expr.Child));
+    const out: [*]ExprEntry = @ptrCast(slots.ptr);
+    var n: usize = 0;
+    for (slots) |c| {
+        if (c.ptr == ExprPtr.nil) continue;
+        const r = c.ptr.asRef();
+        out[n] = .{ .hash = r.hash, .ref = r };
+        n += 1;
+    }
+    return out[0..n];
 }
 
 pub fn parseExportFile(ar: *Arena, input: []const u8, config: Config) ParseError!struct { ExportFile, []const []const u8 } {
@@ -142,9 +156,8 @@ pub fn parseExportFile(ar: *Arena, input: []const u8, config: Config) ParseError
 
     parser.names_by_idx.deinit();
     parser.levels_by_idx.deinit();
+    parser.dag.exprs.buildUnique(compactEntries(parser.exprs_by_idx.slice()));
     parser.exprs_by_idx.deinit();
-    parser.dag.exprs.buildUnique(parser.pending_exprs.items);
-    parser.pending_exprs.deinit(util.smp_allocator);
 
     const name_cache = parser.dag.mkNameCache(parser.anon);
     const export_file = ExportFile{
