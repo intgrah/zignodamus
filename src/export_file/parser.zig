@@ -119,8 +119,11 @@ fn reclaimConsumed(input: []const u8, dropped: usize, consumed: usize) usize {
 
 pub fn parseExportFile(ar: *Arena, input: []const u8, config: Config) ParseError!struct { ExportFile, []const []const u8 } {
     var parser = Parser.init(ar, config);
-    var scratch = std.heap.ArenaAllocator.init(util.smp_allocator);
+    var scratch = Arena.init(util.smp_allocator);
     defer scratch.deinit();
+    scratch.reserve(256 << 10);
+    const scratch_mark = scratch.mark();
+    const ta = scratch.bumpAllocator();
     var dropped: usize = 0;
     var next_reclaim: usize = RECLAIM_WINDOW;
     var lines = std.mem.splitScalar(u8, input, '\n');
@@ -131,8 +134,8 @@ pub fn parseExportFile(ar: *Arena, input: []const u8, config: Config) ParseError
             dropped = reclaimConsumed(input, dropped, consumed);
             next_reclaim = consumed + RECLAIM_WINDOW;
         }
-        defer _ = scratch.reset(.retain_capacity);
-        try parseLine(&parser, scratch.allocator(), raw_line);
+        defer scratch.release(scratch_mark);
+        try parseLine(&parser, ta, raw_line);
         parser.line_num += 1;
     }
 

@@ -23,12 +23,37 @@ pub fn init(child: std.mem.Allocator) Arena {
     };
 }
 
+fn freeSlab(self: *Arena, slab: []u8) void {
+    self.child.free(@as([]align(@alignOf(usize)) u8, @alignCast(slab)));
+}
+
 pub fn deinit(self: *Arena) void {
-    for (self.slabs.items) |slab| {
-        self.child.free(@as([]align(@alignOf(usize)) u8, @alignCast(slab)));
-    }
+    for (self.slabs.items) |slab| self.freeSlab(slab);
     self.slabs.deinit(self.child);
     self.* = undefined;
+}
+
+pub const Mark = struct {
+    slabs: usize,
+    ptr: [*]u8,
+    end: [*]u8,
+};
+
+pub fn reserve(self: *Arena, size: usize) void {
+    if (@intFromPtr(self.end) - @intFromPtr(self.ptr) < size) self.grow(size);
+}
+
+pub fn mark(self: *const Arena) Mark {
+    return .{ .slabs = self.slabs.items.len, .ptr = self.ptr, .end = self.end };
+}
+
+pub fn release(self: *Arena, m: Mark) void {
+    if (self.slabs.items.len != m.slabs) {
+        for (self.slabs.items[m.slabs..]) |slab| self.freeSlab(slab);
+        self.slabs.shrinkRetainingCapacity(m.slabs);
+    }
+    self.ptr = m.ptr;
+    self.end = m.end;
 }
 
 fn grow(self: *Arena, min: usize) void {
