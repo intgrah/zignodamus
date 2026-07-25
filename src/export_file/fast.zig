@@ -26,35 +26,65 @@ fn Match(comptime types: anytype) type {
     return if (nv.len == 1) nv[0] else std.meta.Tuple(nv);
 }
 
+const digit_bias: u64 = 0x3030303030303030;
+
+const pow10 = [_]u64{ 1, 10, 100, 1000, 10_000, 100_000, 1_000_000, 10_000_000 };
+
+inline fn digitRun(chunk: u64) u4 {
+    const V = @Vector(8, u8);
+    const bytes: V = @bitCast(chunk);
+    const is_digit = (bytes -% @as(V, @splat('0'))) <= @as(V, @splat(9));
+    return @ctz(~@as(u8, @bitCast(is_digit)));
+}
+
+inline fn packedDigits(chunk: u64, run: u4) u64 {
+    const v = (chunk -% digit_bias) << @intCast((8 - @as(u6, run)) * 8);
+    const mask: u64 = 0x000000FF000000FF;
+    const mul1: u64 = 0x000F424000000064;
+    const mul2: u64 = 0x0000271000000001;
+    const x = (v *% 10) +% (v >> 8);
+    return (((x & mask) *% mul1) +% (((x >> 16) & mask) *% mul2)) >> 32;
+}
+
 const Cur = struct {
-    s: []const u8,
+    padded: []const u8,
+    len: usize,
     i: usize,
 
+    inline fn chunkAt(c: *const Cur, off: usize) u64 {
+        return std.mem.readInt(u64, c.padded[c.i + off ..][0..8], .little);
+    }
+
     inline fn lit(c: *Cur, comptime l: []const u8) error{Fallback}!void {
-        if (c.i + l.len > c.s.len) return error.Fallback;
-        if (!std.mem.eql(u8, c.s[c.i..][0..l.len], l)) return error.Fallback;
+        if (c.i + l.len > c.len) return error.Fallback;
+        if (!std.mem.eql(u8, c.padded[c.i..][0..l.len], l)) return error.Fallback;
         c.i += l.len;
     }
 
     inline fn uint(c: *Cur, comptime T: type) error{Fallback}!T {
-        const start = c.i;
-        var x: u64 = 0;
-        while (c.i < c.s.len) : (c.i += 1) {
-            const d = c.s[c.i] -% '0';
-            if (d > 9) break;
-            x = x * 10 + d;
+        const lo = c.chunkAt(0);
+        const run = digitRun(lo);
+        if (run == 0) return error.Fallback;
+        if (run < 8) {
+            c.i += run;
+            return std.math.cast(T, packedDigits(lo, run)) orelse error.Fallback;
         }
-        if (c.i == start or c.i - start > 19) return error.Fallback;
+        const hi = c.chunkAt(8);
+        const run2 = digitRun(hi);
+        if (run2 == 8) return error.Fallback;
+        c.i += 8 + @as(usize, run2);
+        const head = packedDigits(lo, 8);
+        const x = if (run2 == 0) head else head * pow10[run2] + packedDigits(hi, run2);
         return std.math.cast(T, x) orelse error.Fallback;
     }
 
     fn quoted(c: *Cur) error{Fallback}![]const u8 {
         try c.lit("\"");
         const start = c.i;
-        while (c.i < c.s.len) : (c.i += 1) {
-            switch (c.s[c.i]) {
+        while (c.i < c.len) : (c.i += 1) {
+            switch (c.padded[c.i]) {
                 '"' => {
-                    const r = c.s[start..c.i];
+                    const r = c.padded[start..c.i];
                     c.i += 1;
                     return r;
                 },
@@ -66,7 +96,7 @@ const Cur = struct {
     }
 
     fn boolean(c: *Cur) error{Fallback}!bool {
-        if (c.i < c.s.len and c.s[c.i] == 't') {
+        if (c.i < c.len and c.padded[c.i] == 't') {
             try c.lit("true");
             return true;
         }
@@ -76,15 +106,15 @@ const Cur = struct {
 
     fn u32Array(c: *Cur, ta: std.mem.Allocator) error{Fallback}![]const u32 {
         try c.lit("[");
-        if (c.i < c.s.len and c.s[c.i] == ']') {
+        if (c.i < c.len and c.padded[c.i] == ']') {
             c.i += 1;
             return &.{};
         }
         var list = std.ArrayList(u32).empty;
         while (true) {
             list.append(ta, try c.uint(u32)) catch util.oom();
-            if (c.i >= c.s.len) return error.Fallback;
-            switch (c.s[c.i]) {
+            if (c.i >= c.len) return error.Fallback;
+            switch (c.padded[c.i]) {
                 ',' => c.i += 1,
                 ']' => {
                     c.i += 1;
@@ -97,14 +127,14 @@ const Cur = struct {
 
     fn skipU32Array(c: *Cur) error{Fallback}!void {
         try c.lit("[");
-        if (c.i < c.s.len and c.s[c.i] == ']') {
+        if (c.i < c.len and c.padded[c.i] == ']') {
             c.i += 1;
             return;
         }
         while (true) {
             _ = try c.uint(u32);
-            if (c.i >= c.s.len) return error.Fallback;
-            switch (c.s[c.i]) {
+            if (c.i >= c.len) return error.Fallback;
+            switch (c.padded[c.i]) {
                 ',' => c.i += 1,
                 ']' => {
                     c.i += 1;
@@ -116,7 +146,7 @@ const Cur = struct {
     }
 
     fn hint(c: *Cur) error{Fallback}!ReducibilityHint {
-        if (c.i < c.s.len and c.s[c.i] == '{') {
+        if (c.i < c.len and c.padded[c.i] == '{') {
             try c.lit("{\"regular\":");
             const depth = try c.uint(u16);
             try c.lit("}");
@@ -141,7 +171,7 @@ const Cur = struct {
     }
 
     fn done(c: *Cur) error{Fallback}!void {
-        if (c.i != c.s.len) return error.Fallback;
+        if (c.i != c.len) return error.Fallback;
     }
 
     fn match(c: *Cur, ta: std.mem.Allocator, comptime pattern: []const u8, comptime types: anytype) error{Fallback}!Match(types) {
@@ -169,18 +199,18 @@ const Cur = struct {
     }
 };
 
-pub fn fastLine(self: *Parser, ta: std.mem.Allocator, line: []const u8) FastError!void {
-    if (line.len < 8) return error.Fallback;
-    var c = Cur{ .s = line, .i = 0 };
-    switch (line[2]) {
-        'i' => switch (line[3]) {
+pub fn fastLine(self: *Parser, ta: std.mem.Allocator, padded: []const u8, len: usize) FastError!void {
+    if (len < 8) return error.Fallback;
+    var c = Cur{ .padded = padded, .len = len, .i = 0 };
+    switch (padded[2]) {
+        'i' => switch (padded[3]) {
             'e' => {
                 try c.lit("{\"ie\":");
                 const idx = BackRef{ .kind = .ie, .i = try c.uint(u32) };
                 try c.lit(",\"");
-                if (c.i + 1 >= line.len) return error.Fallback;
-                switch (line[c.i]) {
-                    'l' => switch (line[c.i + 1]) {
+                if (c.i + 1 >= len) return error.Fallback;
+                switch (padded[c.i]) {
+                    'l' => switch (padded[c.i + 1]) {
                         'a' => {
                             const style, const body, const binder_name, const binder_type = try c.match(ta,
                                 \\lam":{"binderInfo":$,"body":$,"name":$,"type":$}}
@@ -207,7 +237,7 @@ pub fn fastLine(self: *Parser, ta: std.mem.Allocator, line: []const u8) FastErro
                         , .{ usize, u32, u32 });
                         try item.doProj(self, idx, ty_name, proj_idx, structure);
                     },
-                    's' => switch (line[c.i + 1]) {
+                    's' => switch (padded[c.i + 1]) {
                         'o' => {
                             const lvl = try c.match(ta,
                                 \\sort":$}
@@ -229,8 +259,8 @@ pub fn fastLine(self: *Parser, ta: std.mem.Allocator, line: []const u8) FastErro
                 try c.lit("{\"il\":");
                 const idx = BackRef{ .kind = .il, .i = try c.uint(u32) };
                 try c.lit(",\"");
-                if (c.i >= line.len) return error.Fallback;
-                switch (line[c.i]) {
+                if (c.i >= len) return error.Fallback;
+                switch (padded[c.i]) {
                     'i' => {
                         const l, const r = try c.match(ta,
                             \\imax":[$,$]}
@@ -262,8 +292,8 @@ pub fn fastLine(self: *Parser, ta: std.mem.Allocator, line: []const u8) FastErro
                 try c.lit("{\"in\":");
                 const idx = BackRef{ .kind = .in_, .i = try c.uint(u32) };
                 try c.lit(",\"");
-                if (c.i >= line.len) return error.Fallback;
-                switch (line[c.i]) {
+                if (c.i >= len) return error.Fallback;
+                switch (padded[c.i]) {
                     'n' => {
                         const i, const pre = try c.match(ta,
                             \\num":{"i":$,"pre":$}}

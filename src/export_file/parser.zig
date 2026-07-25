@@ -146,6 +146,42 @@ fn buildNameTable(dag: *Dag, slots: []NamePtr) void {
     dag.names.buildUnique(entries[0..n]);
 }
 
+pub const lookahead = 32;
+
+fn bodyEnd(input: []const u8) usize {
+    if (input.len <= lookahead) return 0;
+    var i = input.len - lookahead;
+    while (i > 0 and input[i - 1] != '\n') i -= 1;
+    return i;
+}
+
+fn parseRegion(
+    self: *Parser,
+    ta: std.mem.Allocator,
+    scratch: *Arena,
+    scratch_mark: Arena.Mark,
+    base: []const u8,
+    body_len: usize,
+    reclaim: bool,
+) ParseError!void {
+    var dropped: usize = 0;
+    var next_reclaim: usize = RECLAIM_WINDOW;
+    var off: usize = 0;
+    while (off < body_len) {
+        const nl = std.mem.indexOfScalarPos(u8, base[0..body_len], off, '\n') orelse body_len;
+        if (nl != off) {
+            if (reclaim and off >= next_reclaim) {
+                dropped = reclaimConsumed(base, dropped, off);
+                next_reclaim = off + RECLAIM_WINDOW;
+            }
+            defer scratch.release(scratch_mark);
+            try parseLine(self, ta, base[off..], nl - off);
+            self.line_num += 1;
+        }
+        off = nl + 1;
+    }
+}
+
 pub fn parseExportFile(ar: *Arena, input: []const u8, config: Config) ParseError!struct { ExportFile, []const []const u8 } {
     var parser = Parser.init(ar, config, input.len);
     var scratch = Arena.init(util.smp_allocator);
@@ -153,19 +189,16 @@ pub fn parseExportFile(ar: *Arena, input: []const u8, config: Config) ParseError
     scratch.reserve(256 << 10);
     const scratch_mark = scratch.mark();
     const ta = scratch.bumpAllocator();
-    var dropped: usize = 0;
-    var next_reclaim: usize = RECLAIM_WINDOW;
-    var lines = std.mem.splitScalar(u8, input, '\n');
-    while (lines.next()) |raw_line| {
-        if (raw_line.len == 0) continue;
-        const consumed = @intFromPtr(raw_line.ptr) - @intFromPtr(input.ptr);
-        if (consumed >= next_reclaim) {
-            dropped = reclaimConsumed(input, dropped, consumed);
-            next_reclaim = consumed + RECLAIM_WINDOW;
-        }
-        defer scratch.release(scratch_mark);
-        try parseLine(&parser, ta, raw_line);
-        parser.line_num += 1;
+
+    const body = bodyEnd(input);
+    try parseRegion(&parser, ta, &scratch, scratch_mark, input, body, true);
+    if (body < input.len) {
+        const rest = input.len - body;
+        const tail = util.smp_allocator.alloc(u8, rest + lookahead) catch util.oom();
+        defer util.smp_allocator.free(tail);
+        @memcpy(tail[0..rest], input[body..]);
+        @memset(tail[rest..], 0);
+        try parseRegion(&parser, ta, &scratch, scratch_mark, tail, rest, false);
     }
 
     buildNameTable(&parser.dag, parser.names_by_idx.slice());
@@ -250,8 +283,8 @@ fn parseBinderStyle(v: Value) ParseError!BinderStyle {
     return item.binderStyleOf(try json.asStr(v)) orelse fail("unknown binderInfo");
 }
 
-fn parseLine(self: *Parser, ta: std.mem.Allocator, line: []const u8) ParseError!void {
-    if (fast.fastLine(self, ta, line)) |_| {
+fn parseLine(self: *Parser, ta: std.mem.Allocator, base: []const u8, len: usize) ParseError!void {
+    if (fast.fastLine(self, ta, base, len)) |_| {
         return;
     } else |err| switch (err) {
         error.Fallback => {},
@@ -259,6 +292,10 @@ fn parseLine(self: *Parser, ta: std.mem.Allocator, line: []const u8) ParseError!
         error.Declined => return error.Declined,
     }
 
+    return slowLine(self, ta, base[0..len]);
+}
+
+fn slowLine(self: *Parser, ta: std.mem.Allocator, line: []const u8) ParseError!void {
     var json_parser = json.Parser{ .s = line, .i = 0, .a = ta };
     const obj = try json_parser.value();
     switch (obj) {
