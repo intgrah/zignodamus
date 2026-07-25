@@ -101,6 +101,10 @@ pub const Expr = struct {
         return .{ .hash = kindHash(kind), .fv_mask = maskOf(kind), .kind = kind };
     }
 
+    pub inline fn mkMasked(kind: Kind, fv_mask: u64) Expr {
+        return .{ .hash = kindHash(kind), .fv_mask = fv_mask, .kind = kind };
+    }
+
     pub fn getHash(self: *const Expr) u64 {
         return self.hash;
     }
@@ -240,28 +244,40 @@ pub fn getMajorInduct(rec: *const env.RecursorData) ?NamePtr {
     }
 }
 
-fn childMask(e: ExprPtr) u64 {
-    const k = e.numLooseBvars();
-    if (k == 0) return 0;
-    if (k <= 64) return e.asRef().fv_mask;
-    return 0;
-}
+pub const Child = struct {
+    ptr: ExprPtr,
+    fv_mask: u64,
 
-fn bodyMask(body: ExprPtr) u64 {
-    const k = body.numLooseBvars();
-    if (k == 0) return 0;
-    if (k <= 64) return body.asRef().fv_mask >> 1;
-    return std.math.maxInt(u64);
+    pub inline fn load(p: ExprPtr) Child {
+        const k = p.numLooseBvars();
+        return .{ .ptr = p, .fv_mask = if (k != 0 and k <= 64) p.asRef().fv_mask else 0 };
+    }
+
+    pub inline fn free(self: Child) u64 {
+        const k = self.ptr.numLooseBvars();
+        if (k == 0 or k > 64) return 0;
+        return self.fv_mask;
+    }
+
+    pub inline fn under(self: Child) u64 {
+        const k = self.ptr.numLooseBvars();
+        if (k == 0) return 0;
+        if (k <= 64) return self.fv_mask >> 1;
+        return std.math.maxInt(u64);
+    }
+};
+
+pub inline fn varMask(dbj_idx: u16) u64 {
+    return if (dbj_idx < 64) @as(u64, 1) << @intCast(dbj_idx) else 0;
 }
 
 fn maskOf(kind: Expr.Kind) u64 {
     return switch (kind) {
-        .@"var" => |x| if (x.dbj_idx < 64) @as(u64, 1) << @intCast(x.dbj_idx) else 0,
-        .app => |x| childMask(x.fun) | childMask(x.arg),
-        .pi => |x| childMask(x.binderType()) | bodyMask(x.body),
-        .lambda => |x| childMask(x.binderType()) | bodyMask(x.body),
-        .let => |x| childMask(x.data.binder_type) | childMask(x.data.val) | bodyMask(x.data.body),
-        .proj => |x| childMask(x.structure),
+        .@"var" => |x| varMask(x.dbj_idx),
+        .app => |x| Child.load(x.fun).free() | Child.load(x.arg).free(),
+        .pi, .lambda => |x| Child.load(x.binderType()).free() | Child.load(x.body).under(),
+        .let => |x| Child.load(x.data.binder_type).free() | Child.load(x.data.val).free() | Child.load(x.data.body).under(),
+        .proj => |x| Child.load(x.structure).free(),
         .sort, .@"const", .string_lit, .nat_lit => 0,
     };
 }

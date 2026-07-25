@@ -17,6 +17,7 @@ const BigUintPtr = ptr.BigUintPtr;
 const Name = name.Name;
 const Level = level.Level;
 const Expr = expr.Expr;
+const Child = expr.Child;
 const BinderStyle = expr.BinderStyle;
 
 const Parser = parser.Parser;
@@ -37,7 +38,7 @@ fn pushExpr(self: *Parser, expected: BackRef, e: Expr) void {
     const r = self.arena.create(Expr);
     r.* = e;
     self.pending_exprs.append(util.smp_allocator, r) catch util.oom();
-    self.exprs_by_idx.set(expected.index(), ExprPtr.global(r));
+    self.exprs_by_idx.set(expected.index(), .{ .ptr = ExprPtr.global(r), .fv_mask = e.fv_mask });
 }
 
 pub fn getNamePtr(self: *const Parser, idx: u32) ParseError!NamePtr {
@@ -52,10 +53,14 @@ pub fn getLevelPtr(self: *const Parser, idx: u32) ParseError!LevelPtr {
     return fail("export references level index before it is defined");
 }
 
-pub fn getExprPtr(self: *const Parser, idx: u32) ParseError!ExprPtr {
-    const p = self.exprs_by_idx.at(idx);
-    if (p != ExprPtr.nil) return p;
+pub fn getChild(self: *const Parser, idx: u32) ParseError!Child {
+    const c = self.exprs_by_idx.at(idx);
+    if (c.ptr != ExprPtr.nil) return c;
     return fail("export references expression index before it is defined");
+}
+
+pub fn getExprPtr(self: *const Parser, idx: u32) ParseError!ExprPtr {
+    return (try getChild(self, idx)).ptr;
 }
 
 pub fn getNames(self: *const Parser, ta: std.mem.Allocator, idxs: []const u32) ParseError![]const NamePtr {
@@ -161,56 +166,65 @@ pub fn doConst(self: *Parser, ta: std.mem.Allocator, idx: BackRef, name_idx: u32
 }
 
 pub fn doApp(self: *Parser, idx: BackRef, fn_idx: u32, arg_idx: u32) ParseError!void {
-    const fun = try getExprPtr(self, fn_idx);
-    const arg = try getExprPtr(self, arg_idx);
-    pushExpr(self, idx, .mk(.{ .app = .{
-        .fun = fun,
-        .arg = arg,
-    } }));
+    const fun = try getChild(self, fn_idx);
+    const arg = try getChild(self, arg_idx);
+    pushExpr(self, idx, .mkMasked(.{ .app = .{
+        .fun = fun.ptr,
+        .arg = arg.ptr,
+    } }, fun.free() | arg.free()));
 }
 
 pub fn doBvar(self: *Parser, idx: BackRef, dbj_idx: u16) ParseError!void {
     if (dbj_idx == std.math.maxInt(u16)) return decline("bvar index exceeds implementation limit");
-    pushExpr(self, idx, .mk(.{ .@"var" = .{ .dbj_idx = dbj_idx } }));
+    pushExpr(self, idx, .mkMasked(.{ .@"var" = .{ .dbj_idx = dbj_idx } }, expr.varMask(dbj_idx)));
 }
 
 pub fn doLam(self: *Parser, idx: BackRef, name_idx: u32, type_idx: u32, body_idx: u32, style: BinderStyle) ParseError!void {
     const binder_name = try getNamePtr(self, name_idx);
-    const binder_type = try getExprPtr(self, type_idx);
-    const body = try getExprPtr(self, body_idx);
-    pushExpr(self, idx, .mk(.{ .lambda = .mk(binder_name, style, binder_type, body) }));
+    const binder_type = try getChild(self, type_idx);
+    const body = try getChild(self, body_idx);
+    pushExpr(self, idx, .mkMasked(
+        .{ .lambda = .mk(binder_name, style, binder_type.ptr, body.ptr) },
+        binder_type.free() | body.under(),
+    ));
 }
 
 pub fn doPi(self: *Parser, idx: BackRef, name_idx: u32, type_idx: u32, body_idx: u32, style: BinderStyle) ParseError!void {
     const binder_name = try getNamePtr(self, name_idx);
-    const binder_type = try getExprPtr(self, type_idx);
-    const body = try getExprPtr(self, body_idx);
-    pushExpr(self, idx, .mk(.{ .pi = .mk(binder_name, style, binder_type, body) }));
+    const binder_type = try getChild(self, type_idx);
+    const body = try getChild(self, body_idx);
+    pushExpr(self, idx, .mkMasked(
+        .{ .pi = .mk(binder_name, style, binder_type.ptr, body.ptr) },
+        binder_type.free() | body.under(),
+    ));
 }
 
 pub fn doLet(self: *Parser, idx: BackRef, name_idx: u32, type_idx: u32, value_idx: u32, body_idx: u32, nondep: bool) ParseError!void {
     const binder_name = try getNamePtr(self, name_idx);
-    const binder_type = try getExprPtr(self, type_idx);
-    const val = try getExprPtr(self, value_idx);
-    const body = try getExprPtr(self, body_idx);
+    const binder_type = try getChild(self, type_idx);
+    const val = try getChild(self, value_idx);
+    const body = try getChild(self, body_idx);
     const d = self.arena.create(expr.LetData);
     d.* = .{
         .binder_name = binder_name,
-        .binder_type = binder_type,
-        .val = val,
-        .body = body,
+        .binder_type = binder_type.ptr,
+        .val = val.ptr,
+        .body = body.ptr,
         .nondep = nondep,
     };
-    pushExpr(self, idx, .mk(.{ .let = .{ .data = d } }));
+    pushExpr(self, idx, .mkMasked(
+        .{ .let = .{ .data = d } },
+        binder_type.free() | val.free() | body.under(),
+    ));
 }
 
 pub fn doProj(self: *Parser, idx: BackRef, ty_name_idx: u32, proj_idx: usize, struct_idx: u32) ParseError!void {
     if (proj_idx > std.math.maxInt(u16)) return decline("proj index exceeds implementation limit");
     const ty_name = try getNamePtr(self, ty_name_idx);
-    const structure = try getExprPtr(self, struct_idx);
-    pushExpr(self, idx, .mk(.{ .proj = .{
+    const structure = try getChild(self, struct_idx);
+    pushExpr(self, idx, .mkMasked(.{ .proj = .{
         .ty_name = ty_name,
         .idx = @intCast(proj_idx),
-        .structure = structure,
-    } }));
+        .structure = structure.ptr,
+    } }, structure.free()));
 }
