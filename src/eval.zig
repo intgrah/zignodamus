@@ -80,10 +80,21 @@ fn internFrame(self: *TypeChecker, mask: u64, slots: []const V, lsub: ?*const va
     hasher.writeU64(mask);
     hasher.writeU64(if (lsub) |l| @intFromPtr(l) else 0);
     for (slots) |s| hasher.writeU64(@intFromPtr(s));
-    var probe = value.Frame{ .hash = hasher.finish(), .mask = mask, .slots = slots, .lsub = lsub };
+    const probe = value.Frame{ .hash = hasher.finish(), .mask = mask, .slots = slots, .lsub = lsub };
     if (self.frames.get(&probe)) |r| return r;
-    probe.slots = self.arena.dupe(V, slots);
-    return self.frames.insert(self.arena, &probe);
+    const pair = self.arena.create(value.FramePair);
+    pair.frame = .{ .hash = probe.hash, .mask = mask, .slots = self.arena.dupe(V, slots), .lsub = lsub };
+    pair.env = .{
+        .v = undefined,
+        .parent = undefined,
+        .frame = &pair.frame,
+        .lsub = lsub,
+        .hash = probe.hash,
+        .len = 64 - @clz(mask),
+        .prune_mask = 0,
+        .prune_r = undefined,
+    };
+    return self.frames.insertRef(&pair.frame);
 }
 
 fn internLevelSub(self: *TypeChecker, ks: LevelsPtr, vs: LevelsPtr) *const value.LevelSub {
@@ -118,21 +129,9 @@ pub fn evalInst(self: *TypeChecker, ex: ExprPtr, ks: LevelsPtr, vs: LevelsPtr) V
 }
 
 fn frameEnv(self: *TypeChecker, f: *const value.Frame) E {
-    const gop = self.tc_cache.frame_envs.getOrPut(util.smp_allocator, @intFromPtr(f)) catch util.oom();
-    if (gop.found_existing) return gop.value_ptr.*;
-    const e = self.arena.create(value.Env);
-    e.* = .{
-        .v = undefined,
-        .parent = undefined,
-        .frame = f,
-        .lsub = f.lsub,
-        .hash = f.hash,
-        .len = 64 - @clz(f.mask),
-        .prune_mask = 0,
-        .prune_r = undefined,
-    };
-    gop.value_ptr.* = e;
-    return e;
+    _ = self;
+    const pair: *const value.FramePair = @fieldParentPtr("frame", f);
+    return &pair.env;
 }
 
 fn pruneEnv(self: *TypeChecker, e: E, mask: u64) E {

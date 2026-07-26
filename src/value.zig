@@ -165,6 +165,11 @@ pub const Frame = struct {
     }
 };
 
+pub const FramePair = struct {
+    frame: Frame,
+    env: Env,
+};
+
 pub const Env = struct {
     v: V,
     parent: E,

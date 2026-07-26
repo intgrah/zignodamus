@@ -146,6 +146,12 @@ fn Interner(comptime T: type) type {
             return r;
         }
 
+        pub fn insertRef(self: *Self, r: *const T) *const T {
+            self.maybeGrow();
+            self.place(getHashOf(T, r), r);
+            return r;
+        }
+
         pub fn intern(self: *Self, ar: *Arena, v: T) *const T {
             if (self.get(&v)) |r| return r;
             return self.insert(ar, &v);

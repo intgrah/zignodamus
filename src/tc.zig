@@ -42,7 +42,6 @@ pub const TcCache = struct {
     pi_hc: swiss_map.FxHashMap(struct { usize, usize, ExprPtr, usize }, V) = .empty,
     type_cache: swiss_map.FxHashMap(struct { usize, ExprPtr }, inference.CachedType) = .empty,
     thunk_hc: swiss_map.FxHashMap(struct { usize, ExprPtr }, V) = .empty,
-    frame_envs: swiss_map.FxHashMap(usize, E) = .empty,
     level_subs: swiss_map.FxHashMap(struct { LevelsPtr, LevelsPtr }, *const value.LevelSub) = .empty,
     lsub_bases: swiss_map.FxHashMap(usize, E) = .empty,
     rigid_hc: swiss_map.FxHashMap(struct { u8, u64, u64, usize }, V) = .empty,
