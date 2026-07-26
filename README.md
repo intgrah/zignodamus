@@ -16,10 +16,12 @@ This type checker was kind of optimised for the [Lean kernel arena](https://aren
 
 | Kernel                                                                                | Mathlib |
 | ------------------------------------------------------------------------------------- | ------- |
-| **zignodamus**                                                                        | 6.1m    |
+| **zignodamus**                                                                        | 5.9m    |
 | still-nanoda ([06a07b7](https://github.com/SchrodingerZhu/still-nanoda/tree/06a07b7)) | 15.7m   |
 | nanoda ([f58f2f6](https://github.com/ammkrn/nanoda_lib/tree/f58f2f6))                 | 22.6m   |
 | official ([4.29.0](https://github.com/leanprover/lean4/tree/v4.29.0))                 | 32.5m   |
+
+Time is measured in instructions, divided by 6GHz.
 
 ## Tricks used
 
