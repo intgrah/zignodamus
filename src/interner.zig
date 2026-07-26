@@ -189,6 +189,13 @@ fn Interner(comptime T: type) type {
 
         pub const BuildEntry = struct { hash: u64, ref: *const T };
 
+        const lane_bits: u6 = 6;
+        const lanes: usize = 1 << lane_bits;
+
+        inline fn laneOf(h: u64, shift: u6) usize {
+            return @intCast((h >> shift) & (lanes - 1));
+        }
+
         pub fn buildUnique(self: *Self, entries: []BuildEntry) void {
             std.debug.assert(self.count == 0);
             if (entries.len == 0) return;
@@ -196,20 +203,15 @@ fn Interner(comptime T: type) type {
             while (maxLoad(newcap) < entries.len) newcap *= 2;
             self.allocCap(newcap);
             const bits: u6 = @intCast(@ctz(newcap));
-            if (bits <= 8) {
+            if (bits <= lane_bits) {
                 for (entries) |e| self.placeUniqueRef(e.hash, e.ref);
                 return;
             }
-            const shift: u6 = bits - 8;
-            const keys = smp_allocator.alloc(u8, entries.len) catch util.oom();
-            defer smp_allocator.free(keys);
-            var counts = [_]usize{0} ** 256;
-            for (entries, keys) |e, *k| {
-                k.* = @truncate(e.hash >> shift);
-                counts[k.*] += 1;
-            }
-            var next: [256]usize = undefined;
-            var ends: [256]usize = undefined;
+            const shift: u6 = bits - lane_bits;
+            var counts = [_]usize{0} ** lanes;
+            for (entries) |e| counts[laneOf(e.hash, shift)] += 1;
+            var next: [lanes]usize = undefined;
+            var ends: [lanes]usize = undefined;
             var max_count: usize = 0;
             var sum: usize = 0;
             for (counts, 0..) |c, b| {
@@ -218,17 +220,16 @@ fn Interner(comptime T: type) type {
                 ends[b] = sum;
                 max_count = @max(max_count, c);
             }
-            for (0..256) |b| {
+            for (0..lanes) |b| {
                 var i = next[b];
                 while (i < ends[b]) {
-                    const k = keys[i];
-                    if (k == @as(u8, @intCast(b))) {
+                    const k = laneOf(entries[i].hash, shift);
+                    if (k == b) {
                         i += 1;
                         continue;
                     }
                     const j = next[k];
                     std.mem.swap(BuildEntry, &entries[i], &entries[j]);
-                    std.mem.swap(u8, &keys[i], &keys[j]);
                     next[k] = j + 1;
                 }
             }
