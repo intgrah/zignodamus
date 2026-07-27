@@ -11,8 +11,10 @@ pub const Name = struct {
     hash: u64,
     kind: Kind,
     decl_idx: u32 = no_decl,
+    nat_red: u8 = no_nat_red,
 
     pub const no_decl: u32 = std.math.maxInt(u32);
+    pub const no_nat_red: u8 = std.math.maxInt(u8);
 
     pub const Kind = union(enum) {
         anon,
@@ -37,6 +39,14 @@ pub fn setDeclIdx(n: NamePtr, idx: usize) void {
 
 pub inline fn declIdx(n: NamePtr) u32 {
     return n.asRef().decl_idx;
+}
+
+pub fn setNatRed(n: NamePtr, k: u8) void {
+    @constCast(n.asRef()).nat_red = k;
+}
+
+pub inline fn natRed(n: NamePtr) u8 {
+    return n.asRef().nat_red;
 }
 
 pub fn concatName(self: *TcCtx, n1: NamePtr, n2: NamePtr) NamePtr {

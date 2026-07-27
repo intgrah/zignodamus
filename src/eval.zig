@@ -18,6 +18,7 @@ const BinderStyle = expr.BinderStyle;
 const Expr = expr.Expr;
 const TypeChecker = tc.TypeChecker;
 const NatRed = @import("Dag.zig").NatRed;
+const name_mod = @import("name.zig");
 const FxHasher = @import("hash.zig").FxHasher;
 const BigUintPtr = ptr.BigUintPtr;
 const ExprPtr = ptr.ExprPtr;
@@ -615,7 +616,7 @@ pub inline fn apply(self: *TypeChecker, depth: u32, f: V, a: V) V {
             const head = u.head;
             const head_value = u.head_value;
             const spine = u.spine;
-            if (self.nat_extension and isNatRedName(self, head.name)) {
+            if (self.nat_extension and isNatRedName(head.name)) {
                 const new_spine = spineSnocHc(self, spine, Elim.mkApp(a));
                 if (spineApps(self, depth, new_spine)) |args| {
                     if (doNatRedShallow(self, depth, head.name, args)) |r| {
@@ -664,12 +665,17 @@ fn tryFireRigid(self: *TypeChecker, depth: u32, head: RigidHead, spine: S) V {
     return mkRigidHc(self, head, spine);
 }
 
-fn isNatRedName(self: *TypeChecker, name: NamePtr) bool {
-    return self.ctx.export_file.name_cache.nat_red.contains(name);
+inline fn isNatRedName(name: NamePtr) bool {
+    return name_mod.natRed(name) != name_mod.Name.no_nat_red;
+}
+
+inline fn natRedKind(name: NamePtr) ?NatRed {
+    const k = name_mod.natRed(name);
+    return if (k == name_mod.Name.no_nat_red) null else @enumFromInt(k);
 }
 
 fn natRedDefer(self: *TypeChecker, depth: u32, name: NamePtr, args: []const V) bool {
-    const structural_on_second = switch (self.ctx.export_file.name_cache.nat_red.get(name) orelse return false) {
+    const structural_on_second = switch (natRedKind(name) orelse return false) {
         .add, .sub, .mul, .pow => true,
         else => false,
     };
@@ -1111,7 +1117,7 @@ fn unfoldValueGo(self: *TypeChecker, depth: u32, v: V, force: bool) V {
         if (u.forced) |f| {
             return f;
         }
-        if (self.nat_extension and isNatRedName(self, u.head.name)) {
+        if (self.nat_extension and isNatRedName(u.head.name)) {
             if (spineApps(self, depth, u.spine)) |args| {
                 defer self.ctx.bump.free(args);
                 if (doNatRed(self, depth, u.head.name, args)) |r| {
@@ -1559,7 +1565,7 @@ fn doNatRedShallow(self: *TypeChecker, depth: u32, name: NamePtr, args: []const 
 }
 
 fn doNatRedAt(self: *TypeChecker, depth: u32, name: NamePtr, args: []const V, deep: bool) ?V {
-    const kind = self.ctx.export_file.name_cache.nat_red.get(name) orelse return null;
+    const kind = natRedKind(name) orelse return null;
     switch (kind) {
         .succ => {
             if (args.len != 1) return null;
