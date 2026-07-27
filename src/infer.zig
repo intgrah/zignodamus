@@ -231,7 +231,6 @@ fn inferProj(
     idx: u16,
     structure: ExprPtr,
 ) Reject!V {
-    _ = ty_name;
     const struct_ty = try infer(self, flag, depth, e, c, structure);
     const struct_ty_f = eval.forceAll(self, depth, struct_ty);
     const struct_ty_is_prop = conv.isPropType(self, depth, struct_ty_f);
@@ -239,10 +238,19 @@ fn inferProj(
         return tc.reject("projection structure type is not an inductive", .{});
     }
     const ind_name = struct_ty_f.rigid.head.inductive.name;
+    if (ind_name != ty_name) {
+        return tc.reject("projection type name does not match the structure's inductive", .{});
+    }
     const ind_levels = struct_ty_f.rigid.head.inductive.levels;
     const params = eval.spineApps(self, depth, struct_ty_f.rigid.spine) orelse return tc.reject("projection structure type has a non-applicative spine", .{});
     defer self.ctx.bump.free(params);
     const ind = self.env.getInductive(ind_name) orelse return tc.reject("projection structure type is not an inductive", .{});
+    if (ind.all_ctor_names.len != 1) {
+        return tc.reject("projection of an inductive without exactly one constructor", .{});
+    }
+    if (params.len != @as(usize, ind.num_params) + @as(usize, ind.num_indices)) {
+        return tc.reject("projection structure type is not fully applied", .{});
+    }
     const ctor_name = ind.all_ctor_names[0];
     const struct_v = argValue(self, depth, e, structure);
     var cur = eval.constHeadType(self, ctor_name, ind_levels);

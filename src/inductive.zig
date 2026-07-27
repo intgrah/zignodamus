@@ -196,6 +196,7 @@ fn checkInductiveDeclarChecked(
         defer cache.deinit();
         var tcr = TypeChecker.init(&ctx, &e, &ar, null, &cache);
         defer tcr.deinit();
+        try checkDeclaredMetadata(&tcr, &st, &unmodified_tys_ctors);
         if (isNested(&st)) {
             try restoreAndCheck(&tcr, &st, &unmodified_tys_ctors, ind.all_ind_names);
         } else {
@@ -1190,6 +1191,52 @@ fn assertClosedDefEq(self: *TypeChecker, x: ExprPtr, y: ExprPtr) tc.Reject!void 
     }
 }
 
+fn checkDeclaredMetadata(
+    self: *TypeChecker,
+    st: *const InductiveCheckState,
+    unmodified: *const std.ArrayList(IndTyHeader),
+) tc.Reject!void {
+    for (unmodified.items, 0..) |header, i| {
+        const d = Env.getOldDeclar(self.env, header.name) orelse return tc.reject("inductive not declared", .{});
+        if (d.* != .inductive) return tc.reject("expected an inductive", .{});
+        const ind = d.inductive;
+        if (ind.num_params != st.num_params or
+            ind.num_indices != st.index_counts.items[i] or
+            ind.all_ctor_names.len != header.ctors.items.len)
+        {
+            return tc.reject("inductive metadata does not match the derived inductive", .{});
+        }
+        for (header.ctors.items, 0..) |ctor, ci| {
+            const cdecl = Env.getOldDeclar(self.env, ctor.name) orelse return tc.reject("constructor not declared", .{});
+            if (cdecl.* != .constructor) return tc.reject("expected a constructor", .{});
+            const cd = cdecl.constructor;
+            const telescope = expr.piTelescopeSize(ctor.ty);
+            if (telescope < @as(usize, st.num_params)) {
+                return tc.reject("constructor telescope is shorter than the parameters", .{});
+            }
+            if (cd.inductive_name != header.name or
+                cd.ctor_idx != try u16TryFrom(ci) or
+                cd.num_params != st.num_params or
+                cd.num_fields != try u16TryFrom(telescope - @as(usize, st.num_params)))
+            {
+                return tc.reject("constructor metadata does not match the derived constructor", .{});
+            }
+        }
+        const rec_name = TcCtx.str(self.ctx, header.name, TcCtx.allocString(self.ctx, "rec"));
+        if (Env.getOldDeclar(self.env, rec_name)) |rdecl| {
+            if (rdecl.* == .recursor) {
+                const rd = rdecl.recursor;
+                if (rd.is_k != st.k_target.? or
+                    rd.num_params != st.num_params or
+                    rd.num_indices != st.index_counts.items[i])
+                {
+                    return tc.reject("recursor metadata does not match the derived recursor", .{});
+                }
+            }
+        }
+    }
+}
+
 fn assertNonnestedTysDefEq(self: *TypeChecker, base_ind: *const InductiveData, st: *const InductiveCheckState) tc.Reject!void {
     util.assert(!isNested(st));
     for (base_ind.all_ind_names) |nm| {
@@ -1259,9 +1306,24 @@ fn assertNonnestedRecursorsDefEq(self: *TypeChecker, st: *const InductiveCheckSt
             if (!conv.defEqAt(self, 0, imported_w_new_uparams, made)) {
                 return tc.reject("def_eq failed", .{});
             }
-            util.assert(old_rec_rules.len == new_rec_rules.len);
+            if (old.recursor.is_k != new.recursor.is_k or
+                old.recursor.num_params != new.recursor.num_params or
+                old.recursor.num_indices != new.recursor.num_indices or
+                old.recursor.num_motives != new.recursor.num_motives or
+                old.recursor.num_minors != new.recursor.num_minors)
+            {
+                return tc.reject("recursor metadata does not match the derived recursor", .{});
+            }
+            if (old_rec_rules.len != new_rec_rules.len) {
+                return tc.reject("recursor has the wrong number of rules", .{});
+            }
             var i: usize = 0;
             while (i < old_rec_rules.len) : (i += 1) {
+                if (old_rec_rules[i].ctor_name != new_rec_rules[i].ctor_name or
+                    old_rec_rules[i].ctor_telescope_size_wo_params != new_rec_rules[i].ctor_telescope_size_wo_params)
+                {
+                    return tc.reject("recursor rule does not match the derived rule", .{});
+                }
                 try assertNonnestedRecRuleDefEq(self, st, Declar.info(old).uparams, &old_rec_rules[i], &new_rec_rules[i]);
             }
         } else {
