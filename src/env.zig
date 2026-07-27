@@ -1,7 +1,9 @@
 const std = @import("std");
+const name = @import("name.zig");
 const ptr = @import("ptr.zig");
 const swiss_map = @import("swiss_map.zig");
 
+const Name = name.Name;
 const NamePtr = ptr.NamePtr;
 const LevelsPtr = ptr.LevelsPtr;
 const ExprPtr = ptr.ExprPtr;
@@ -119,7 +121,10 @@ pub const Env = struct {
         const cutoff = switch (limit) {
             .empty => 0,
             .by_index => |idx| idx,
-            .by_name => |n| declars.getIndex(n) orelse 0,
+            .by_name => |n| switch (name.declIdx(n)) {
+                Name.no_decl => 0,
+                else => |i| @as(usize, i),
+            },
         };
         return Env{ .declars = declars, .cutoff = cutoff, .temp_declars = temp_declars };
     }
@@ -139,7 +144,7 @@ pub const Env = struct {
     }
 
     pub fn getOldDeclar(self: *const Env, n: NamePtr) ?*const Declar {
-        const idx = self.declars.getIndex(n) orelse return null;
+        const idx: usize = name.declIdx(n);
         if (idx < self.cutoff) {
             return &self.declars.values()[idx];
         } else {

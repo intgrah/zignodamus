@@ -10,6 +10,9 @@ const kindHash = @import("hash.zig").kindHash;
 pub const Name = struct {
     hash: u64,
     kind: Kind,
+    decl_idx: u32 = no_decl,
+
+    pub const no_decl: u32 = std.math.maxInt(u32);
 
     pub const Kind = union(enum) {
         anon,
@@ -27,6 +30,14 @@ pub const Name = struct {
         return self.hash;
     }
 };
+
+pub fn setDeclIdx(n: NamePtr, idx: usize) void {
+    @constCast(n.asRef()).decl_idx = @intCast(idx);
+}
+
+pub inline fn declIdx(n: NamePtr) u32 {
+    return n.asRef().decl_idx;
+}
 
 pub fn concatName(self: *TcCtx, n1: NamePtr, n2: NamePtr) NamePtr {
     switch (n2.asRef().kind) {

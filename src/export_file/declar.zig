@@ -1,6 +1,7 @@
 const std = @import("std");
 const util = @import("../util.zig");
 const env = @import("../env.zig");
+const name = @import("../name.zig");
 const parser = @import("parser.zig");
 const json = @import("json.zig");
 const item = @import("item.zig");
@@ -112,6 +113,7 @@ fn axiomDecision(self: *const Parser, n: NamePtr) AxiomDecision {
 
 fn insertDeclar(self: *Parser, n: NamePtr, d: Declar) ParseError!void {
     if (self.declars.get(n) != null) return fail("duplicate declaration in export file");
+    name.setDeclIdx(n, self.declars.count());
     self.declars.put(util.smp_allocator, n, d) catch util.oom();
 }
 
