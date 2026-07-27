@@ -296,6 +296,11 @@ inline fn refEql(comptime T: type, a: *const T, b: *const T) bool {
         value.Frame => return a.mask == b.mask and a.lsub == b.lsub and std.mem.eql(value.V, a.slots, b.slots),
         name.Name => return a.hash == b.hash and std.meta.eql(a.kind, b.kind),
         expr.Expr => {
+            if (a.kind == .@"const") {
+                if (b.kind != .@"const") return false;
+                return a.hash == b.hash and a.kind.@"const".eql(b.kind.@"const");
+            }
+            if (b.kind == .@"const") return false;
             if (a.kind == .let) {
                 if (b.kind != .let) return false;
                 return a.hash == b.hash and std.meta.eql(a.kind.let.data.*, b.kind.let.data.*);

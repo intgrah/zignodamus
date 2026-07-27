@@ -19,6 +19,7 @@ const BigUintPtr = ptr.BigUintPtr;
 const FxHashMap = swiss_map.FxHashMap;
 
 const kindHash = @import("hash.zig").kindHash;
+const FxHasher = @import("hash.zig").FxHasher;
 
 pub const BinderStyle = enum(u2) {
     default,
@@ -47,6 +48,27 @@ pub const Binder = struct {
 
     pub fn binderStyle(self: Binder) BinderStyle {
         return @enumFromInt(self.tagged_type.tag());
+    }
+};
+
+pub const ConstData = struct {
+    name: NamePtr,
+    levels: LevelsPtr,
+    decl_idx: u32 = name.Name.no_decl,
+
+    pub fn mk(n: NamePtr, levels: LevelsPtr) ConstData {
+        return .{ .name = n, .levels = levels, .decl_idx = name.declIdx(n) };
+    }
+
+    pub fn getHash(self: ConstData) u64 {
+        var hasher = FxHasher{};
+        hasher.writeU64(self.name.getHash());
+        hasher.writeU64(self.levels.getHash());
+        return hasher.finish();
+    }
+
+    pub fn eql(self: ConstData, o: ConstData) bool {
+        return self.name == o.name and self.levels == o.levels;
     }
 };
 
@@ -82,10 +104,7 @@ pub const Expr = struct {
         sort: struct {
             level: LevelPtr,
         },
-        @"const": struct {
-            name: NamePtr,
-            levels: LevelsPtr,
-        },
+        @"const": ConstData,
         app: struct {
             fun: ExprPtr,
             arg: ExprPtr,

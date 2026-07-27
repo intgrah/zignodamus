@@ -120,7 +120,7 @@ pub fn infer(self: *TypeChecker, comptime flag: InferFlag, depth: u32, e: E, c: 
             return value.mkSort(self.arena, level.simplify(self.ctx, sc));
         },
         .@"const" => |cn| {
-            if (self.env.getDeclar(cn.name) == null) {
+            if (self.env.getDeclarAt(cn.name, cn.decl_idx) == null) {
                 return tc.reject("declaration not found in infer_const", .{});
             }
             if (flag == .Check) {

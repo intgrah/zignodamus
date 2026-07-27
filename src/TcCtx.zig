@@ -181,7 +181,7 @@ pub fn mkSort(self: *TcCtx, lvl: LevelPtr) ExprPtr {
 }
 
 pub fn mkConst(self: *TcCtx, n: NamePtr, levels: LevelsPtr) ExprPtr {
-    const e: expr.Expr = .mk(.{ .@"const" = .{ .name = n, .levels = levels } });
+    const e: expr.Expr = .mk(.{ .@"const" = .mk(n, levels) });
     return allocExpr(self, &e);
 }
 

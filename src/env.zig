@@ -136,6 +136,16 @@ pub const Env = struct {
         return self.getOldDeclar(n);
     }
 
+    pub fn getDeclarAt(self: *const Env, n: NamePtr, idx: u32) ?*const Declar {
+        if (self.temp_declars) |ext| {
+            if (ext.getPtr(n)) |d| return d;
+        }
+        if (@as(usize, idx) < self.cutoff) {
+            return &self.declars.values()[idx];
+        }
+        return null;
+    }
+
     pub fn getTempDeclar(self: *const Env, n: NamePtr) ?*const Declar {
         if (self.temp_declars) |ext| {
             if (ext.getPtr(n)) |d| return d;

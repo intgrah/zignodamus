@@ -127,6 +127,9 @@ fn compactEntries(slots: []expr.Child) []ExprEntry {
     for (slots) |c| {
         if (c.ptr == ExprPtr.nil) continue;
         const r = c.ptr.asRef();
+        if (r.kind == .@"const") {
+            @constCast(r).kind.@"const".decl_idx = name.declIdx(r.kind.@"const".name);
+        }
         out[n] = .{ .hash = r.hash, .ref = r };
         n += 1;
     }

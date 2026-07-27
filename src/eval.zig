@@ -467,7 +467,7 @@ fn evalNoCache(self: *TypeChecker, depth: u32, e: E, ex: ExprPtr) V {
         },
         .@"const" => |c| {
             const levels = if (e.lsub) |ls| level_mod.substLevels(self.ctx, c.levels, ls.ks, ls.vs) else c.levels;
-            return evalConst(self, c.name, levels);
+            return evalConst(self, c.name, levels, c.decl_idx);
         },
         .app => unreachable,
         .lambda => |l| return value.mkLam(self.arena, l.binder_name, l.binderStyle(), l.binderType(), Closure.mkEval(keyEnv(self, e, ex), l.body)),
@@ -503,12 +503,12 @@ fn evalNoCache(self: *TypeChecker, depth: u32, e: E, ex: ExprPtr) V {
     }
 }
 
-pub fn evalConst(self: *TypeChecker, name: NamePtr, levels: LevelsPtr) V {
+pub fn evalConst(self: *TypeChecker, name: NamePtr, levels: LevelsPtr, decl_idx: u32) V {
     if (self.tc_cache.const_head_value_cache.get(.{ name, levels })) |cached| {
         return cached;
     }
     const empty = value.spineEmpty();
-    const v = if (self.env.getDeclar(name)) |dptr| switch (dptr.*) {
+    const v = if (self.env.getDeclarAt(name, decl_idx)) |dptr| switch (dptr.*) {
         .definition, .theorem => blk: {
             const cell = self.arena.create(?V);
             cell.* = null;
