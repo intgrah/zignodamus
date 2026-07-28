@@ -53,6 +53,9 @@ pub const TcCache = struct {
     content_hc: swiss_map.FxHashMap(struct { u8, u64 }, V) = .empty,
     free_bvar_cache: swiss_map.FxHashMap(usize, bool) = .empty,
     quote_cache: swiss_map.FxHashMap(struct { usize, u32 }, ExprPtr) = .empty,
+    /// Arity annotation: for a lambda body expression, the number of directly
+    /// nested lambda binders. Drives the fast multi-argument apply (apply-n) path.
+    arity_cache: swiss_map.FxHashMap(ExprPtr, u32) = .empty,
 
     pub const empty: TcCache = .{};
 

@@ -32,6 +32,7 @@ Time is measured in instructions, divided by 6GHz.
 - [Approximate conversion checking](https://github.com/AndrasKovacs/smalltt#approximate-conversion-checking)
 - Closure capture minimisation by free variable set tracking
 - Over-approximation of loose free variables (from nanoda)
+- Arity-annotated values with a fast apply-n path ([eval/apply](docs/apply-n-arity.md))
 
 ### Engineering
 

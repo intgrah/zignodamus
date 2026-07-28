@@ -54,6 +54,7 @@ test {
         util,
         value,
         @import("run.zig"),
+        @import("bench_apply.zig"),
     };
     inline for (modules) |m| {
         std.testing.refAllDecls(m);

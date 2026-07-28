@@ -633,6 +633,77 @@ pub inline fn apply(self: *TypeChecker, depth: u32, f: V, a: V) V {
     }
 }
 
+/// Arity annotation.
+///
+/// `leadingLambdas(e)` is the number of directly nested `.lambda` binders at the
+/// head of expression `e`. A whnf lambda value exposes its outermost binder; this
+/// annotation records how many *further* binders follow in the same closure body,
+/// i.e. how many arguments the value can absorb by pure beta before a non-lambda
+/// is exposed. The count is a purely syntactic property of the (interned) body
+/// expression, so it is memoised once and reused across every closure over it.
+fn leadingLambdas(self: *TypeChecker, e: ExprPtr) u32 {
+    if (self.tc_cache.arity_cache.get(e)) |c| {
+        return c;
+    }
+    var n: u32 = 0;
+    var cur = e;
+    while (cur.asRef().kind == .lambda) {
+        n += 1;
+        cur = cur.asRef().kind.lambda.body;
+    }
+    self.tc_cache.arity_cache.put(util.smp_allocator, e, n) catch util.oom();
+    return n;
+}
+
+/// The arity of a lambda value: the length of its maximal beta-reducible binder
+/// chain (always ≥ 1). Reads the annotation of the closure body.
+pub fn lamArity(self: *TypeChecker, v: V) u32 {
+    std.debug.assert(v.* == .lam);
+    return 1 + leadingLambdas(self, v.lam.body.body());
+}
+
+/// Fast multi-argument application ("apply-n").
+///
+/// Applies `args` left-to-right to `f`. When the head is a lambda, the arity
+/// annotation tells us how many arguments the lambda chain can absorb, and the
+/// whole run of beta-redexes is discharged with a single environment extension
+/// chain and a single `eval` of the innermost body — instead of materialising an
+/// intermediate closure value (a partial application) for every binder, as a
+/// one-argument-at-a-time `apply` loop would.
+///
+/// The environment threading exactly mirrors `apply`/`eval`: each intermediate
+/// binder prunes the environment to the body's free variables via `keyEnv`, so
+/// the result is denotationally and (for the discharged run) structurally
+/// identical to folding `apply` over `args`. It is used on the hot reduction
+/// paths where a freshly built value is saturated against a known argument
+/// vector (iota/recursor firing, definition unfolding, quotient lifting).
+pub fn applyMany(self: *TypeChecker, depth: u32, f0: V, args: []const V) V {
+    var f = f0;
+    var i: usize = 0;
+    const n = args.len;
+    while (i < n) {
+        if (f.* != .lam) {
+            f = apply(self, depth, f, args[i]);
+            i += 1;
+            continue;
+        }
+        const clo = f.lam.body;
+        const arity: usize = @intCast(lamArity(self, f));
+        const take = @min(arity, n - i);
+        var e = value.envExtend(self.arena, clo.env, args[i]);
+        var body = clo.body();
+        var k: usize = 1;
+        while (k < take) : (k += 1) {
+            const pruned = keyEnv(self, e, body);
+            e = value.envExtend(self.arena, pruned, args[i + k]);
+            body = body.asRef().kind.lambda.body;
+        }
+        i += take;
+        f = eval(self, depth, e, body);
+    }
+    return f;
+}
+
 pub fn applyClosure(self: *TypeChecker, depth: u32, clo: *const Closure, v: V, binder_ty: ?V) V {
     const e = value.envExtend(self.arena, clo.env, v);
     switch (clo.kind()) {
@@ -1142,11 +1213,25 @@ fn unfoldValueGo(self: *TypeChecker, depth: u32, v: V, force: bool) V {
         var cur = head_value;
         const elems = spine.toVec(util.smp_allocator);
         defer util.smp_allocator.free(elems);
+        // Discharge maximal runs of applications with the apply-n path, flushing
+        // on each projection eliminator (which cannot be batched).
+        const buf = self.ctx.bump.alloc(V, elems.len) catch util.oom();
+        defer self.ctx.bump.free(buf);
+        var run: usize = 0;
         for (elems) |elim| {
-            cur = if (elim.isApp())
-                apply(self, depth, cur, elim.appV())
-            else
-                doProj(self, depth, elim.projTyName(), elim.projIdx(), cur);
+            if (elim.isApp()) {
+                buf[run] = elim.appV();
+                run += 1;
+            } else {
+                if (run != 0) {
+                    cur = applyMany(self, depth, cur, buf[0..run]);
+                    run = 0;
+                }
+                cur = doProj(self, depth, elim.projTyName(), elim.projIdx(), cur);
+            }
+        }
+        if (run != 0) {
+            cur = applyMany(self, depth, cur, buf[0..run]);
         }
         v.unfold.forced = cur;
         return cur;
@@ -1287,15 +1372,9 @@ fn fireRecursor(
         break :blk v;
     };
     const nprefix = @as(usize, rec.num_params + rec.num_motives + rec.num_minors);
-    for (args[0..nprefix]) |a| {
-        result = apply(self, depth, result, a);
-    }
-    for (ctor_args[num_extra..]) |a| {
-        result = apply(self, depth, result, a);
-    }
-    for (args[rec.majorIdx() + 1 ..]) |a| {
-        result = apply(self, depth, result, a);
-    }
+    result = applyMany(self, depth, result, args[0..nprefix]);
+    result = applyMany(self, depth, result, ctor_args[num_extra..]);
+    result = applyMany(self, depth, result, args[rec.majorIdx() + 1 ..]);
     return result;
 }
 
@@ -1319,7 +1398,7 @@ fn natRecNatlit(
     const major_idx = rec.majorIdx();
     const zero_case = args[nparams + nmotives];
     const succ_case = forceThunk(self, depth, args[nparams + nmotives + 1]);
-    var result = if (n.eqlZero())
+    const result = if (n.eqlZero())
         zero_case
     else blk: {
         const pred = nat.pred(n);
@@ -1334,10 +1413,7 @@ fn natRecNatlit(
         const stepped = apply(self, depth, succ_case, pred_val);
         break :blk apply(self, depth, stepped, ih);
     };
-    for (args[major_idx + 1 ..]) |a| {
-        result = apply(self, depth, result, a);
-    }
-    return result;
+    return applyMany(self, depth, result, args[major_idx + 1 ..]);
 }
 
 fn tryStructEtaReduce(self: *TypeChecker, depth: u32, major: V, rec: *const RecursorData) ?V {
@@ -1549,11 +1625,8 @@ fn fireQuot(self: *TypeChecker, depth: u32, c_name: NamePtr, args: []const V, qm
     if (3 >= args.len) return null;
     const f = args[3];
     const last = qmk_args[2];
-    var result = apply(self, depth, f, last);
-    for (args[rest_idx..]) |a| {
-        result = apply(self, depth, result, a);
-    }
-    return result;
+    const result = apply(self, depth, f, last);
+    return applyMany(self, depth, result, args[rest_idx..]);
 }
 
 fn doNatRed(self: *TypeChecker, depth: u32, name: NamePtr, args: []const V) ?V {
