@@ -134,11 +134,11 @@ fn debugExpr(f: *Writer, elem: ExprPtr) Error!void {
         ),
         .pi => |p| try f.print(
             "Pi ({f} : {f}), {f}",
-            .{ d(p.binder_name), d(p.binder_type), d(p.body) },
+            .{ d(p.binder_name), d(p.binderType()), d(p.body) },
         ),
         .lambda => |la| try f.print(
             "fun ({f} : {f}) => {f}",
-            .{ d(la.binder_name), d(la.binder_type), d(la.body) },
+            .{ d(la.binder_name), d(la.binderType()), d(la.body) },
         ),
         .proj => |pr| try f.print("%({f}).{d}", .{ d(pr.structure), pr.idx }),
         .nat_lit => |nl| try f.print("NLit({any})", .{nl.ptr.asRef()}),
