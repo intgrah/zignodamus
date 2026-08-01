@@ -477,6 +477,12 @@ fn unfoldHint(self: *TypeChecker, name: NamePtr) ReducibilityHint {
 }
 
 fn convSpine(self: *TypeChecker, comptime mode: Mode, depth: u32, sx: S, sy: S) bool {
+    if (sx == sy) {
+        return true;
+    }
+    if (sx.length != sy.length) {
+        return false;
+    }
     const empty = &Spine.empty;
     if (sx == empty or sy == empty) {
         return sx == empty and sy == empty;

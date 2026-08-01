@@ -29,6 +29,15 @@ pub fn init(config: *const Config) Dag {
     };
 }
 
+pub fn clear(self: *Dag) void {
+    self.names.clear();
+    self.levels.clear();
+    self.exprs.clear();
+    self.uparams.clear();
+    self.strings.clear();
+    if (self.bignums) |*b| b.clear();
+}
+
 pub fn deinit(self: *Dag) void {
     self.names.deinit();
     self.levels.deinit();

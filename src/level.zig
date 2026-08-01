@@ -316,7 +316,12 @@ pub fn leq(self: *TcCtx, l: LevelPtr, r: LevelPtr) bool {
 }
 
 pub fn eqAntisymm(self: *TcCtx, l: LevelPtr, r: LevelPtr) bool {
-    return leq(self, l, r) and leq(self, r, l);
+    if (l == r) return true;
+    const key = if (@intFromEnum(l) < @intFromEnum(r)) .{ l, r } else .{ r, l };
+    if (self.level_cache.eq_cache.get(key)) |c| return c;
+    const eq = leq(self, l, r) and leq(self, r, l);
+    self.level_cache.eq_cache.put(util.smp_allocator, key, eq) catch util.oom();
+    return eq;
 }
 
 pub fn eqAntisymmMany(self: *TcCtx, xs_in: LevelsPtr, ys_in: LevelsPtr) bool {

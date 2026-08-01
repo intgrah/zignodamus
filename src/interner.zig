@@ -138,6 +138,42 @@ fn Interner(comptime T: type) type {
             }
         }
 
+        pub const Probe = union(enum) {
+            found: *const T,
+            vacant: struct { pos: usize, h: u64 },
+        };
+
+        pub fn probe(self: *Self, v: *const T) Probe {
+            self.maybeGrow();
+            const h = getHashOf(T, v);
+            const f = h2(h);
+            const tagged = slotOfRef(h, v);
+            const mask = self.cap - 1;
+            var pos: usize = @intCast(h & mask);
+            var stride: usize = 16;
+            while (true) {
+                const g = self.loadGroup(pos);
+                var m = matchByte(g, f);
+                while (m != 0) {
+                    const i = (pos + @ctz(m)) & mask;
+                    if (slotMatches(self.slots[i], tagged, v)) return .{ .found = refOfSlot(self.slots[i]) };
+                    m &= m - 1;
+                }
+                const empties = matchByte(g, ctrl_empty);
+                if (empties != 0) return .{ .vacant = .{ .pos = (pos + @ctz(empties)) & mask, .h = h } };
+                pos = (pos + stride) & mask;
+                stride += 16;
+            }
+        }
+
+        pub fn fillVacant(self: *Self, pos: usize, h: u64, r: *const T) *const T {
+            self.setCtrl(pos, h2(h));
+            self.slots[pos] = slotOfRef(h, r);
+            self.count += 1;
+            self.growth_left -= 1;
+            return r;
+        }
+
         pub fn insert(self: *Self, ar: *Arena, v: *const T) *const T {
             self.maybeGrow();
             const r = ar.create(T);
@@ -274,6 +310,22 @@ fn Interner(comptime T: type) type {
             }
             self.* = .{};
         }
+
+        pub fn clearShrink(self: *Self, max_keep_cap: usize) void {
+            if (self.cap > max_keep_cap) {
+                self.deinit();
+                return;
+            }
+            self.clear();
+        }
+
+        pub fn clear(self: *Self) void {
+            if (self.count == 0) return;
+            var i: usize = 0;
+            while (i < self.cap + 16) : (i += 1) self.ctrl[i] = ctrl_empty;
+            self.count = 0;
+            self.growth_left = maxLoad(self.cap);
+        }
     };
 }
 
@@ -293,7 +345,13 @@ inline fn refEql(comptime T: type, a: *const T, b: *const T) bool {
     switch (T) {
         []const u8 => return std.mem.eql(u8, a.*, b.*),
         BigUint => return a.eql(b.*),
-        value.Frame => return a.mask == b.mask and a.lsub == b.lsub and std.mem.eql(value.V, a.slots, b.slots),
+        value.Frame => {
+            if (a.mask != b.mask or a.lsub != b.lsub or a.slots.len != b.slots.len) return false;
+            for (a.slots, b.slots) |x, y| {
+                if (x != y) return false;
+            }
+            return true;
+        },
         name.Name => return a.hash == b.hash and std.meta.eql(a.kind, b.kind),
         expr.Expr => {
             if (a.kind == .@"const") {
@@ -360,6 +418,15 @@ pub const BigUintInterner = struct {
         return self.insert(ar, v);
     }
 
+    pub fn clear(self: *BigUintInterner) void {
+        var it = self.table.iterator();
+        while (it.next()) |e| {
+            var m = e.key_ptr.*.*;
+            m.deinit();
+        }
+        self.table.clearRetainingCapacity();
+    }
+
     pub fn deinit(self: *BigUintInterner) void {
         var it = self.table.iterator();
         while (it.next()) |e| {
@@ -394,6 +461,10 @@ pub const LevelsInterner = struct {
         const r = ar.dupe(LevelPtr, v);
         self.table.putContext(ar.child, r, {}, Context{}) catch util.oom();
         return r;
+    }
+
+    pub fn clear(self: *LevelsInterner) void {
+        self.table.clearRetainingCapacity();
     }
 
     pub fn deinit(self: *LevelsInterner) void {

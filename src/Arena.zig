@@ -6,6 +6,7 @@ slabs: std.ArrayList([]u8),
 ptr: [*]u8,
 end: [*]u8,
 next_slab_size: usize,
+bytes: usize,
 
 const Arena = @This();
 
@@ -20,6 +21,7 @@ pub fn init(child: std.mem.Allocator) Arena {
         .ptr = sentinel,
         .end = sentinel,
         .next_slab_size = initial_slab_size,
+        .bytes = 0,
     };
 }
 
@@ -31,6 +33,25 @@ pub fn deinit(self: *Arena) void {
     for (self.slabs.items) |slab| self.freeSlab(slab);
     self.slabs.deinit(self.child);
     self.* = undefined;
+}
+
+pub fn reset(self: *Arena) void {
+    if (self.slabs.items.len > 1) {
+        for (self.slabs.items[1..]) |slab| self.freeSlab(slab);
+        self.slabs.shrinkRetainingCapacity(1);
+    }
+    if (self.slabs.items.len == 1) {
+        const slab = self.slabs.items[0];
+        self.ptr = slab.ptr;
+        self.end = slab.ptr + slab.len;
+        self.bytes = slab.len;
+    } else {
+        const sentinel: [*]u8 = @ptrFromInt(@alignOf(usize));
+        self.ptr = sentinel;
+        self.end = sentinel;
+        self.bytes = 0;
+    }
+    self.next_slab_size = max_slab_size;
 }
 
 pub const Mark = struct {
@@ -61,6 +82,7 @@ fn grow(self: *Arena, min: usize) void {
     while (size < min) size *= 2;
     const slab = self.child.alignedAlloc(u8, .of(usize), size) catch util.oom();
     self.slabs.append(self.child, slab) catch util.oom();
+    self.bytes += size;
     self.ptr = slab.ptr;
     self.end = slab.ptr + slab.len;
     self.next_slab_size = @min(size * 2, max_slab_size);

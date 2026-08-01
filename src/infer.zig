@@ -17,6 +17,7 @@ const RigidHead = value.RigidHead;
 const TypeChecker = tc.TypeChecker;
 const ExprPtr = ptr.ExprPtr;
 const LevelPtr = ptr.LevelPtr;
+const LevelsPtr = ptr.LevelsPtr;
 const NamePtr = ptr.NamePtr;
 const C = value.C;
 const E = value.E;
@@ -26,6 +27,11 @@ const InferFlag = enum {
     InferOnly,
     Check,
 };
+
+fn uparamScope(self: *TypeChecker) LevelsPtr {
+    const info = self.declar_info orelse return CachedType.no_uparams;
+    return info.uparams;
+}
 
 pub fn checkDeclarInfo(self: *TypeChecker, d: *const Declar) Reject!void {
     const info = d.info();
@@ -76,27 +82,13 @@ fn argValue(self: *TypeChecker, depth: u32, e: E, a: ExprPtr) V {
     };
 }
 
-/// Inference cache entry: (result: V, checked: bool).
-/// - [64-1] @intFromPtr(result) 2-byte aligned
-/// - [1-0] checked
+/// Inference cache entry
 pub const CachedType = struct {
-    bits: usize,
+    result: V,
+    checked_under: LevelsPtr,
 
-    comptime {
-        std.debug.assert(@alignOf(value.Value) >= 2);
-    }
-
-    pub fn pack(v: V, is_checked: bool) CachedType {
-        return .{ .bits = @intFromPtr(v) | @intFromBool(is_checked) };
-    }
-
-    pub fn result(self: CachedType) V {
-        return @ptrFromInt(self.bits & ~@as(usize, 1));
-    }
-
-    pub fn checked(self: CachedType) bool {
-        return self.bits & 1 != 0;
-    }
+    pub const unchecked: LevelsPtr = @enumFromInt(1);
+    pub const no_uparams: LevelsPtr = @enumFromInt(3);
 };
 
 fn litInductiveType(self: *TypeChecker, n: ?NamePtr) V {
@@ -143,9 +135,10 @@ pub fn infer(self: *TypeChecker, comptime flag: InferFlag, depth: u32, e: E, c: 
         .app, .lambda, .pi, .let, .proj => {},
     }
     const key = .{ @intFromPtr(eval.keyEnv(self, e, ex)), ex };
+    const scope = uparamScope(self);
     if (self.tc_cache.type_cache.get(key)) |cached| {
-        if (flag == .InferOnly or cached.checked()) {
-            return cached.result();
+        if (flag == .InferOnly or cached.checked_under == scope) {
+            return cached.result;
         }
     }
     const r = switch (ex.asRef().kind) {
@@ -189,7 +182,8 @@ pub fn infer(self: *TypeChecker, comptime flag: InferFlag, depth: u32, e: E, c: 
         .proj => |p| try inferProj(self, flag, depth, e, c, p.ty_name, p.idx, p.structure),
         else => unreachable,
     };
-    self.tc_cache.type_cache.put(util.smp_allocator, key, CachedType.pack(r, flag == .Check)) catch util.oom();
+    const stamp: CachedType = .{ .result = r, .checked_under = if (flag == .Check) scope else CachedType.unchecked };
+    self.tc_cache.type_cache.put(util.smp_allocator, key, stamp) catch util.oom();
     return r;
 }
 

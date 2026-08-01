@@ -27,6 +27,7 @@ level_cache: LevelCache,
 
 pub const LevelCache = struct {
     simplify_cache: FxHashMap(LevelPtr, LevelPtr) = .empty,
+    eq_cache: FxHashMap(struct { LevelPtr, LevelPtr }, bool) = .empty,
 
     pub const empty: LevelCache = .{};
 

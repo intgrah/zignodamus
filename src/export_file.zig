@@ -1,6 +1,7 @@
 pub const parser = @import("export_file/parser.zig");
 
 const env = @import("env.zig");
+const util = @import("util.zig");
 const ptr = @import("ptr.zig");
 const Dag = @import("Dag.zig");
 const FxHashMap = @import("swiss_map.zig").FxHashMap;
@@ -18,6 +19,13 @@ pub const ExportFile = struct {
 
     pub fn newEnv(self: *const ExportFile, env_limit: env.EnvLimit) env.Env {
         return env.Env.init(&self.declars, env_limit);
+    }
+
+    pub fn deinit(self: *ExportFile) void {
+        self.dag.deinit();
+        self.declars.deinit(util.smp_allocator);
+        self.mutual_block_sizes.deinit(util.smp_allocator);
+        self.name_cache.nat_red.deinit(util.smp_allocator);
     }
 };
 

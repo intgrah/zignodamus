@@ -65,7 +65,8 @@ pub fn run(io: std.Io, gpa: std.mem.Allocator, options: Options) !void {
     var global_arena = Arena.init(util.smp_allocator);
     defer global_arena.deinit();
 
-    const export_file, const skipped_axioms = try parser.parseExportFile(&global_arena, input.bytes(), options.config);
+    var export_file, const skipped_axioms = try parser.parseExportFile(&global_arena, input.bytes(), options.config);
+    defer export_file.deinit();
     input.release(gpa);
     input = .empty;
     if (options.parse_only) return;

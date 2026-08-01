@@ -28,6 +28,15 @@ pub fn UnionFind(comptime A: type) type {
             self.index_of.clearRetainingCapacity();
         }
 
+        pub fn clearShrink(self: *Self, max_keep: usize) void {
+            if (self.entries.capacity > max_keep) {
+                self.deinit();
+                self.* = .empty;
+                return;
+            }
+            self.clear();
+        }
+
         fn getOrPush(self: *Self, e: A) usize {
             const gop = self.index_of.getOrPut(util.smp_allocator, e) catch util.oom();
             if (gop.found_existing) return gop.value_ptr.*;

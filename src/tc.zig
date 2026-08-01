@@ -24,6 +24,10 @@ const E = value.E;
 const V = value.V;
 const S = value.S;
 
+pub const prune_dm_len: usize = 1024;
+
+pub const PruneEntry = struct { e: usize, mask: u64, r: E };
+
 pub const TcCache = struct {
     value_eq: union_find.UnionFind(usize) = .empty,
     unfold_const_cache: swiss_map.FxHashMap(struct { NamePtr, LevelsPtr }, V) = .empty,
@@ -52,26 +56,34 @@ pub const TcCache = struct {
     canon_cache: swiss_map.FxHashMap(usize, V) = .empty,
     content_hc: swiss_map.FxHashMap(struct { u8, u64 }, V) = .empty,
     free_bvar_cache: swiss_map.FxHashMap(usize, bool) = .empty,
+    frames: interner.FrameInterner = .empty,
+    prune_dm: [prune_dm_len]PruneEntry = @splat(.{ .e = 0, .mask = 0, .r = undefined }),
     quote_cache: swiss_map.FxHashMap(struct { usize, u32 }, ExprPtr) = .empty,
 
     pub const empty: TcCache = .{};
 
     pub fn deinit(self: *TcCache) void {
         inline for (@typeInfo(TcCache).@"struct".fields) |f| {
-            if (comptime std.mem.eql(u8, f.name, "value_eq")) {
+            if (comptime std.mem.eql(u8, f.name, "value_eq") or std.mem.eql(u8, f.name, "frames")) {
                 @field(self, f.name).deinit();
-            } else if (comptime std.mem.eql(u8, f.name, "probe_depth")) {} else {
+            } else if (comptime (std.mem.eql(u8, f.name, "probe_depth") or std.mem.eql(u8, f.name, "prune_dm"))) {} else {
                 @field(self, f.name).deinit(util.smp_allocator);
             }
         }
     }
 
-    pub fn clear(self: *TcCache) void {
+    const keep_cap: usize = 1 << 15;
+
+    pub fn clearAll(self: *TcCache) void {
         inline for (@typeInfo(TcCache).@"struct".fields) |f| {
             if (comptime std.mem.eql(u8, f.name, "value_eq")) {
-                @field(self, f.name).clear();
-            } else if (comptime (std.mem.eql(u8, f.name, "probe_depth") or std.mem.eql(u8, f.name, "closed_eval_cache"))) {} else {
-                @field(self, f.name).clearRetainingCapacity();
+                @field(self, f.name).clearShrink(keep_cap);
+            } else if (comptime std.mem.eql(u8, f.name, "frames")) {
+                @field(self, f.name).clearShrink(keep_cap);
+            } else if (comptime std.mem.eql(u8, f.name, "prune_dm")) {
+                @memset(&self.prune_dm, .{ .e = 0, .mask = 0, .r = undefined });
+            } else if (comptime std.mem.eql(u8, f.name, "probe_depth")) {} else {
+                @field(self, f.name).clearShrink(util.smp_allocator, keep_cap);
             }
         }
     }
@@ -111,7 +123,6 @@ pub const TypeChecker = struct {
     arena: *Arena,
     declar_info: ?DeclarInfo,
     nat_extension: bool,
-    frames: interner.FrameInterner,
 
     pub fn init(
         dag: *TcCtx,
@@ -128,12 +139,7 @@ pub const TypeChecker = struct {
             .arena = arena_,
             .declar_info = declar_info,
             .nat_extension = nat_extension,
-            .frames = .empty,
         };
-    }
-
-    pub fn deinit(self: *TypeChecker) void {
-        self.frames.deinit();
     }
 };
 
@@ -147,7 +153,6 @@ fn checkDeclarWith(self: *const ExportFile, d: *const Declar, ar: *Arena, ctx: *
     }
     var e = self.newEnv(.{ .by_name = d.info().name });
     var checker = TypeChecker.init(ctx, &e, ar, d.info().*, cache);
-    defer checker.deinit();
     switch (d.*) {
         .theorem, .definition, .opaque_ => inference.checkDefLike(&checker, d) catch |err| reportWithName(d, err),
         .axiom, .constructor, .recursor => inference.checkDeclarInfo(&checker, d) catch |err| reportWithName(d, err),
@@ -184,22 +189,44 @@ pub fn reportWithName(d: *const Declar, err: Reject) void {
     }
 }
 
-pub fn checkDeclar(self: *const ExportFile, d: *const Declar) void {
-    var ar = Arena.init(util.smp_allocator);
-    defer ar.deinit();
-    var ctx = TcCtx.init(self, &ar);
-    defer TcCtx.deinit(&ctx);
-    var cache: TcCache = .empty;
-    defer cache.deinit();
-    checkDeclarWith(self, d, &ar, &ctx, &cache);
-}
+const session_budget: usize = 1 << 22;
+
+const Session = struct {
+    ar: Arena,
+    ctx: TcCtx,
+    cache: TcCache,
+
+    fn init(ef: *const ExportFile, self: *Session) void {
+        self.ar = Arena.init(util.smp_allocator);
+        self.ctx = TcCtx.init(ef, &self.ar);
+        self.cache = .empty;
+    }
+
+    fn deinit(self: *Session) void {
+        self.cache.deinit();
+        TcCtx.deinit(&self.ctx);
+        self.ar.deinit();
+    }
+
+    fn recycle(self: *Session) void {
+        self.cache.clearAll();
+        self.ctx.dag.clear();
+        self.ctx.level_cache.simplify_cache.clearRetainingCapacity();
+        self.ctx.level_cache.eq_cache.clearRetainingCapacity();
+        self.ar.reset();
+    }
+};
 
 pub fn checkAllDeclarsSerial(self: *const ExportFile) void {
     const Worker = struct {
         fn run(ef: *const ExportFile) void {
+            var s: Session = undefined;
+            Session.init(ef, &s);
+            defer s.deinit();
             var it = ef.declars.iterator();
             while (it.next()) |entry| {
-                checkDeclar(ef, entry.value_ptr);
+                checkDeclarWith(ef, entry.value_ptr, &s.ar, &s.ctx, &s.cache);
+                if (s.ar.bytes > session_budget) s.recycle();
             }
         }
     };
@@ -207,16 +234,23 @@ pub fn checkAllDeclarsSerial(self: *const ExportFile) void {
     t.join();
 }
 
+const chunk_size: usize = 64;
+
 fn checkAllDeclarsPar(self: *const ExportFile, num_threads: usize) void {
     var task_num = std.atomic.Value(usize).init(0);
     const Worker = struct {
         fn run(ef: *const ExportFile, counter: *std.atomic.Value(usize)) void {
+            var s: Session = undefined;
+            Session.init(ef, &s);
+            defer s.deinit();
+            const total = ef.declars.count();
             while (true) {
-                const idx = counter.fetchAdd(1, .monotonic);
-                if (idx < ef.declars.count()) {
-                    checkDeclar(ef, &ef.declars.values()[idx]);
-                } else {
-                    break;
+                const start = counter.fetchAdd(chunk_size, .monotonic);
+                if (start >= total) break;
+                const end = @min(start + chunk_size, total);
+                for (ef.declars.values()[start..end]) |*d| {
+                    checkDeclarWith(ef, d, &s.ar, &s.ctx, &s.cache);
+                    if (s.ar.bytes > session_budget) s.recycle();
                 }
             }
         }

@@ -66,6 +66,14 @@ pub fn SwissMap(comptime K: type, comptime Val: type, comptime Ctx: type) type {
             while (i < n) : (i += 1) ptr[i] = ctrl_empty;
         }
 
+        pub fn clearShrink(self: *Self, a: std.mem.Allocator, max_keep_cap: usize) void {
+            if (self.cap > max_keep_cap) {
+                self.deinit(a);
+                return;
+            }
+            self.clearRetainingCapacity();
+        }
+
         pub fn clearRetainingCapacity(self: *Self) void {
             if (self.count == 0) return;
             setEmpty(self.ctrl, self.cap + 16);

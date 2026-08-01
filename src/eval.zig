@@ -76,26 +76,26 @@ fn mkUnfoldHc(self: *TypeChecker, name: NamePtr, levels: LevelsPtr, spine: S, he
     return u;
 }
 
-fn internFrame(self: *TypeChecker, mask: u64, slots: []const V, lsub: ?*const value.LevelSub) *const value.Frame {
-    var hasher = FxHasher{};
-    hasher.writeU64(mask);
-    hasher.writeU64(if (lsub) |l| @intFromPtr(l) else 0);
-    for (slots) |s| hasher.writeU64(@intFromPtr(s));
-    const probe = value.Frame{ .hash = hasher.finish(), .mask = mask, .slots = slots, .lsub = lsub };
-    if (self.frames.get(&probe)) |r| return r;
-    const pair = self.arena.create(value.FramePair);
-    pair.frame = .{ .hash = probe.hash, .mask = mask, .slots = self.arena.dupe(V, slots), .lsub = lsub };
-    pair.env = .{
-        .v = undefined,
-        .parent = undefined,
-        .frame = &pair.frame,
-        .lsub = lsub,
-        .hash = probe.hash,
-        .len = 64 - @clz(mask),
-        .prune_mask = 0,
-        .prune_r = undefined,
-    };
-    return self.frames.insertRef(&pair.frame);
+fn internFrame(self: *TypeChecker, hash: u64, mask: u64, slots: []const V, lsub: ?*const value.LevelSub) *const value.Frame {
+    const key = value.Frame{ .hash = hash, .mask = mask, .slots = slots, .lsub = lsub };
+    switch (self.tc_cache.frames.probe(&key)) {
+        .found => |r| return r,
+        .vacant => |slot| {
+            const pair = self.arena.create(value.FramePair);
+            pair.frame = .{ .hash = hash, .mask = mask, .slots = self.arena.dupe(V, slots), .lsub = lsub };
+            pair.env = .{
+                .v = undefined,
+                .parent = undefined,
+                .frame = &pair.frame,
+                .lsub = lsub,
+                .hash = hash,
+                .len = 64 - @clz(mask),
+                .prune_mask = 0,
+                .prune_r = undefined,
+            };
+            return self.tc_cache.frames.fillVacant(slot.pos, slot.h, &pair.frame);
+        },
+    }
 }
 
 fn internLevelSub(self: *TypeChecker, ks: LevelsPtr, vs: LevelsPtr) *const value.LevelSub {
@@ -136,13 +136,32 @@ fn frameEnv(self: *TypeChecker, f: *const value.Frame) E {
 }
 
 fn pruneEnv(self: *TypeChecker, e: E, mask: u64) E {
-    if (mask == 0) return lsubBase(self, e.lsub);
-    if (e.len == 0) return e;
-    if (e.frame) |f| {
-        if (f.mask == mask) return e;
+    if (mask == 0) {
+        return lsubBase(self, e.lsub);
     }
-    if (e.prune_mask == mask) return e.prune_r;
+    if (e.len == 0) {
+        return e;
+    }
+    if (e.frame) |f| {
+        if (f.mask == mask) {
+            return e;
+        }
+    }
+    if (e.prune_mask == mask) {
+        return e.prune_r;
+    }
+    const slot = (@intFromPtr(e) *% 0x9E3779B97F4A7C15 ^ mask *% 0xD6E8FEB86659FD93) >> 54;
+    const ent = &self.tc_cache.prune_dm[@intCast(slot)];
+    if (ent.e == @intFromPtr(e) and ent.mask == mask) {
+        const hit = ent.r;
+        const mh = @constCast(e);
+        mh.prune_mask = mask;
+        mh.prune_r = hit;
+        return hit;
+    }
     var buf: [64]V = undefined;
+    var hasher = FxHasher{};
+    hasher.writeU64(if (e.lsub) |l| @intFromPtr(l) else 0);
     var n: usize = 0;
     var out_mask: u64 = 0;
     var rem = mask;
@@ -155,7 +174,9 @@ fn pruneEnv(self: *TypeChecker, e: E, mask: u64) E {
                 rem &= rem - 1;
                 if (j < 64 - @as(u7, consumed) and (f.mask >> j) & 1 != 0) {
                     const below = f.mask & ((@as(u64, 1) << j) - 1);
-                    buf[n] = f.slots[@popCount(below)];
+                    const sv = f.slots[@popCount(below)];
+                    buf[n] = sv;
+                    hasher.writeU64(@intFromPtr(sv));
                     out_mask |= @as(u64, 1) << (consumed + j);
                     n += 1;
                 }
@@ -164,6 +185,7 @@ fn pruneEnv(self: *TypeChecker, e: E, mask: u64) E {
         }
         if (rem & 1 != 0) {
             buf[n] = cur.v;
+            hasher.writeU64(@intFromPtr(cur.v));
             out_mask |= @as(u64, 1) << consumed;
             n += 1;
         }
@@ -172,7 +194,11 @@ fn pruneEnv(self: *TypeChecker, e: E, mask: u64) E {
         consumed += 1;
         cur = cur.parent;
     }
-    const r = frameEnv(self, internFrame(self, out_mask, buf[0..n], e.lsub));
+    var hasher2 = FxHasher{};
+    hasher2.writeU64(out_mask);
+    hasher2.writeU64(hasher.finish());
+    const r = frameEnv(self, internFrame(self, hasher2.finish(), out_mask, buf[0..n], e.lsub));
+    ent.* = .{ .e = @intFromPtr(e), .mask = mask, .r = r };
     const m = @constCast(e);
     m.prune_mask = mask;
     m.prune_r = r;
@@ -519,7 +545,7 @@ pub fn evalConst(self: *TypeChecker, name: NamePtr, levels: LevelsPtr, decl_idx:
         .quot => value.mkRigidHeadWithEmpty(self.arena, RigidHead{ .quot_const = .{ .name = name, .levels = levels } }, empty),
         .inductive => value.mkRigidHeadWithEmpty(self.arena, RigidHead{ .inductive = .{ .name = name, .levels = levels } }, empty),
         .axiom, .opaque_ => value.mkRigidHeadWithEmpty(self.arena, RigidHead{ .axiom = .{ .name = name, .levels = levels } }, empty),
-    } else value.mkRigidHeadWithEmpty(self.arena, RigidHead{ .axiom = .{ .name = name, .levels = levels } }, empty);
+    } else return value.mkRigidHeadWithEmpty(self.arena, RigidHead{ .axiom = .{ .name = name, .levels = levels } }, empty);
     self.tc_cache.const_head_value_cache.put(util.smp_allocator, .{ name, levels }, v) catch util.oom();
     return v;
 }
@@ -1576,13 +1602,19 @@ fn doNatRedAt(self: *TypeChecker, depth: u32, name: NamePtr, args: []const V, de
         .div_go, .mod_core_go => {
             if (args.len != 5) return null;
             const y = valueToBignumAt(self, depth, args[0], deep) orelse return null;
-            const x = valueToBignumAt(self, depth, args[3], deep) orelse return null;
+            const x = valueToBignumAt(self, depth, args[3], deep) orelse {
+                nat.free(y);
+                return null;
+            };
             return doNatBinVal(self, x, y, if (kind == .div_go) .div else .mod);
         },
         else => {
             if (args.len != 2) return null;
             const xn = valueToBignumAt(self, depth, args[0], deep) orelse return null;
-            const yn = valueToBignumAt(self, depth, args[1], deep) orelse return null;
+            const yn = valueToBignumAt(self, depth, args[1], deep) orelse {
+                nat.free(xn);
+                return null;
+            };
             return doNatBinVal(self, xn, yn, kind);
         },
     }
