@@ -47,10 +47,12 @@ pub fn IndexArray(comptime T: type) type {
         noinline fn growTo(self: *Self, need: usize) void {
             var cap = self.cap;
             while (cap < need) cap *= 2;
-            const items = map(cap);
-            @memcpy(items[0..self.len], self.items[0..self.len]);
-            unmap(self.items, self.cap);
-            self.items = items;
+            const buf = util.remapAnon(
+                @ptrCast(@alignCast(self.items)),
+                self.cap * @sizeOf(T),
+                cap * @sizeOf(T),
+            );
+            self.items = @ptrCast(@alignCast(buf.ptr));
             self.cap = cap;
         }
     };

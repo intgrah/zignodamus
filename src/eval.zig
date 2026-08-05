@@ -68,7 +68,7 @@ pub fn mkBvarHc(self: *TypeChecker, level: u32, ty: V) V {
 }
 
 fn mkUnfoldHc(self: *TypeChecker, name: NamePtr, levels: LevelsPtr, spine: S, head_value: *?V) V {
-    const key = .{ name, levels, @intFromPtr(spine), @intFromPtr(head_value) };
+    const key = .{ @intFromPtr(head_value), @intFromPtr(spine) };
     const gop = self.tc_cache.unfold_hc.getOrPut(util.smp_allocator, key) catch util.oom();
     if (gop.found_existing) return gop.value_ptr.*;
     const u = value.mkUnfold(self.arena, name, levels, spine, head_value);
@@ -90,8 +90,6 @@ fn internFrame(self: *TypeChecker, hash: u64, mask: u64, slots: []const V, lsub:
                 .lsub = lsub,
                 .hash = hash,
                 .len = 64 - @clz(mask),
-                .prune_mask = 0,
-                .prune_r = undefined,
             };
             return self.tc_cache.frames.fillVacant(slot.pos, slot.h, &pair.frame);
         },
@@ -143,21 +141,14 @@ inline fn pruneEnv(self: *TypeChecker, e: E, mask: u64) E {
         return e;
     }
     if (e.frame) |f| {
-        if (f.mask == mask) {
+        if (f.mask & mask == f.mask) {
             return e;
         }
     }
-    if (e.prune_mask == mask) {
-        return e.prune_r;
-    }
-    const slot = (@intFromPtr(e) *% 0x9E3779B97F4A7C15 ^ mask *% 0xD6E8FEB86659FD93) >> 54;
+    const slot = (@intFromPtr(e) *% 0x9E3779B97F4A7C15 ^ mask *% 0xD6E8FEB86659FD93) >> (64 - @ctz(tc.prune_dm_len));
     const ent = &self.tc_cache.prune_dm[@intCast(slot)];
     if (ent.e == @intFromPtr(e) and ent.mask == mask) {
-        const hit = ent.r;
-        const mh = @constCast(e);
-        mh.prune_mask = mask;
-        mh.prune_r = hit;
-        return hit;
+        return ent.r;
     }
     return pruneEnvCold(self, e, mask, ent);
 }
@@ -173,17 +164,18 @@ noinline fn pruneEnvCold(self: *TypeChecker, e: E, mask: u64, ent: *tc.PruneEntr
     var cur = e;
     while (rem != 0 and cur != &value.Env.nil) {
         if (cur.frame) |f| {
-            while (rem != 0) {
-                const j: u6 = @intCast(@ctz(rem));
-                rem &= rem - 1;
-                if (j < 64 - @as(u7, consumed) and (f.mask >> j) & 1 != 0) {
-                    const below = f.mask & ((@as(u64, 1) << j) - 1);
-                    const sv = f.slots[@popCount(below)];
-                    buf[n] = sv;
-                    hasher.writeU64(@intFromPtr(sv));
-                    out_mask |= @as(u64, 1) << (consumed + j);
-                    n += 1;
-                }
+            const limit: u32 = 64 - @as(u32, consumed);
+            const bound: u64 = if (limit >= 64) std.math.maxInt(u64) else (@as(u64, 1) << @intCast(limit)) - 1;
+            const m2 = rem & f.mask & bound;
+            out_mask |= m2 << consumed;
+            var sel = util.selectRanks(m2, f.mask);
+            while (sel != 0) {
+                const i: usize = @ctz(sel);
+                sel &= sel - 1;
+                const sv = f.slots[i];
+                buf[n] = sv;
+                hasher.writeU64(@intFromPtr(sv));
+                n += 1;
             }
             break;
         }
@@ -203,9 +195,6 @@ noinline fn pruneEnvCold(self: *TypeChecker, e: E, mask: u64, ent: *tc.PruneEntr
     hasher2.writeU64(hasher.finish());
     const r = frameEnv(self, internFrame(self, hasher2.finish(), out_mask, buf[0..n], e.lsub));
     ent.* = .{ .e = @intFromPtr(e), .mask = mask, .r = r };
-    const m = @constCast(e);
-    m.prune_mask = mask;
-    m.prune_r = r;
     return r;
 }
 
@@ -253,7 +242,7 @@ inline fn mkLamHc(
     body: Closure,
 ) V {
     std.debug.assert(body.kind() == .eval);
-    const key = .{ binder_type, @intFromPtr(body.env), body.body() };
+    const key = .{ binder_type.withTag(@intFromEnum(binder_style)), @intFromPtr(body.env), body.body() };
     const gop = self.tc_cache.lam_hc.getOrPut(util.smp_allocator, key) catch util.oom();
     if (gop.found_existing) return gop.value_ptr.*;
     const v = value.mkLam(self.arena, binder_name, binder_style, binder_type, body);
@@ -299,7 +288,7 @@ fn canonSpine(self: *TypeChecker, spine: S) S {
 
 fn canonCompute(self: *TypeChecker, v: V) V {
     switch (v.*) {
-        .lam => |l| return mkLamHc(self, l.binder_name, l.binder_style, l.binder_type, l.body),
+        .lam => |l| return mkLamHc(self, l.binder_name, l.binderStyle(), l.binderType(), l.body),
         .pi => |p| return mkPiHc(self, p.binder_name, p.binder_style, p.domain, p.body),
         .sort => |s| return canonContent(self, 0, s.level.getHash(), v),
         .nat_lit => |n| return canonContent(self, 1, n.ptr.getHash(), v),
@@ -336,12 +325,12 @@ inline fn mkPiHc(
 }
 
 pub fn eval(self: *TypeChecker, depth: u32, e: E, ex: ExprPtr) V {
+    if (ex.numLooseBvars() == 0 and e.lsub == null) {
+        return evalClosed(self, depth, e, ex);
+    }
     switch (ex.asRef().kind) {
         .app, .pi, .lambda, .let, .proj => {},
         else => return evalNoCache(self, depth, e, ex),
-    }
-    if (ex.numLooseBvars() == 0 and e.lsub == null) {
-        return evalClosed(self, depth, e, ex);
     }
     const te = keyEnv(self, e, ex);
     const key = .{ @intFromPtr(te), ex };
@@ -609,7 +598,7 @@ pub fn lamDomain(self: *TypeChecker, depth: u32, v: V) V {
                 return d;
             }
             const e = l.body.env;
-            const bt = l.binder_type;
+            const bt = l.binderType();
             const d = eval(self, depth, e, bt);
             v.lam.domain = d;
             return d;

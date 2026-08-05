@@ -11,6 +11,8 @@ const BigUint = @import("nat.zig").BigUint;
 const LevelPtr = ptr.LevelPtr;
 const smp_allocator = util.smp_allocator;
 
+pub var build_threads: usize = 1;
+
 fn Interner(comptime T: type) type {
     return struct {
         ctrl: [*]u8 = dummy_ctrl[0..].ptr,
@@ -210,6 +212,35 @@ fn Interner(comptime T: type) type {
             return r;
         }
 
+        fn placeUniqueBounded(self: *Self, h: u64, r: *const T, lo: usize, hi: usize) bool {
+            const f = h2(h);
+            const tagged = slotOfRef(h, r);
+            const mask = self.cap - 1;
+            var pos: usize = @intCast(h & mask);
+            var stride: usize = 16;
+            while (true) {
+                if (pos < lo or pos + 16 > hi) return false;
+                const g = self.loadGroup(pos);
+                var m = matchByte(g, f);
+                while (m != 0) {
+                    const i = (pos + @ctz(m)) & mask;
+                    if (slotMatches(self.slots[i], tagged, r)) @panic("Attempted to insert duplicate");
+                    m &= m - 1;
+                }
+                const empties = matchByte(g, ctrl_empty);
+                if (empties != 0) {
+                    const i = (pos + @ctz(empties)) & mask;
+                    if (i < lo or i >= hi) return false;
+                    self.ctrl[i] = f;
+                    if (i < 16) self.ctrl[self.cap + i] = f;
+                    self.slots[i] = slotOfRef(h, r);
+                    return true;
+                }
+                pos = (pos + stride) & mask;
+                stride += 16;
+            }
+        }
+
         inline fn placeUniqueRef(self: *Self, h: u64, r: *const T) void {
             const f = h2(h);
             const tagged = slotOfRef(h, r);
@@ -284,31 +315,115 @@ fn Interner(comptime T: type) type {
                     next[k] = j + 1;
                 }
             }
-            const pair_b = smp_allocator.alloc(BuildEntry, max_count) catch util.oom();
-            defer smp_allocator.free(pair_b);
-            var bucket_start: usize = 0;
-            for (counts) |c| {
-                const bucket = entries[bucket_start .. bucket_start + c];
-                bucket_start += c;
-                var src: []BuildEntry = bucket;
-                if (shift > 8) {
-                    const dst: []BuildEntry = pair_b[0..c];
-                    const sh: u6 = shift - 8;
-                    var pass = [_]usize{0} ** 256;
-                    for (src) |e| pass[@as(usize, @intCast((e.hash >> sh) & 0xff))] += 1;
-                    var acc: usize = 0;
-                    for (&pass) |*p| {
-                        const t = p.*;
-                        p.* = acc;
-                        acc += t;
-                    }
-                    for (src) |e| {
-                        const d: usize = @intCast((e.hash >> sh) & 0xff);
-                        dst[pass[d]] = e;
-                        pass[d] += 1;
-                    }
-                    src = dst;
+            var starts: [lanes]usize = undefined;
+            var acc0: usize = 0;
+            for (counts, 0..) |c, b| {
+                starts[b] = acc0;
+                acc0 += c;
+            }
+
+            const nthreads = @min(build_threads, lanes);
+            if (nthreads <= 1) {
+                const pair_b = smp_allocator.alloc(BuildEntry, max_count) catch util.oom();
+                defer smp_allocator.free(pair_b);
+                for (counts, 0..) |c, b| {
+                    const bucket = entries[starts[b] .. starts[b] + c];
+                    self.buildBucket(bucket, pair_b[0..c], shift, 0, self.cap, null);
                 }
+                self.count = entries.len;
+                self.growth_left = maxLoad(self.cap) - entries.len;
+                return;
+            }
+
+            const Ctxt = struct {
+                self_: *Self,
+                entries_: []BuildEntry,
+                counts_: *const [lanes]usize,
+                starts_: *const [lanes]usize,
+                shift_: u6,
+                max_count_: usize,
+                overflow: [][]BuildEntry,
+
+                fn run(c: *@This(), t: usize, nt: usize) void {
+                    const b0 = lanes * t / nt;
+                    const b1 = lanes * (t + 1) / nt;
+                    if (b0 >= b1) return;
+                    const lo = b0 << c.shift_;
+                    const hi = @min(b1 << c.shift_, c.self_.cap);
+                    const pair = smp_allocator.alloc(BuildEntry, c.max_count_) catch util.oom();
+                    defer smp_allocator.free(pair);
+                    var over = std.ArrayList(BuildEntry).empty;
+                    for (b0..b1) |b| {
+                        const cn = c.counts_[b];
+                        const bucket = c.entries_[c.starts_[b] .. c.starts_[b] + cn];
+                        c.self_.buildBucket(bucket, pair[0..cn], c.shift_, lo, hi, &over);
+                    }
+                    c.overflow[t] = over.toOwnedSlice(smp_allocator) catch util.oom();
+                }
+            };
+
+            const overflow = smp_allocator.alloc([]BuildEntry, nthreads) catch util.oom();
+            defer smp_allocator.free(overflow);
+            @memset(overflow, &.{});
+            var ctxt = Ctxt{
+                .self_ = self,
+                .entries_ = entries,
+                .counts_ = &counts,
+                .starts_ = &starts,
+                .shift_ = shift,
+                .max_count_ = max_count,
+                .overflow = overflow,
+            };
+            const threads = smp_allocator.alloc(std.Thread, nthreads - 1) catch util.oom();
+            defer smp_allocator.free(threads);
+            for (threads, 1..) |*th, t| {
+                th.* = std.Thread.spawn(.{}, Ctxt.run, .{ &ctxt, t, nthreads }) catch util.oom();
+            }
+            Ctxt.run(&ctxt, 0, nthreads);
+            for (threads) |th| th.join();
+
+            for (overflow) |ov| {
+                for (ov) |e| self.placeUniqueRef(e.hash, e.ref);
+                smp_allocator.free(ov);
+            }
+            self.count = entries.len;
+            self.growth_left = maxLoad(self.cap) - entries.len;
+        }
+
+        fn buildBucket(
+            self: *Self,
+            bucket: []BuildEntry,
+            scratch: []BuildEntry,
+            shift: u6,
+            lo: usize,
+            hi: usize,
+            over: ?*std.ArrayList(BuildEntry),
+        ) void {
+            var src: []BuildEntry = bucket;
+            if (shift > 8) {
+                const sh: u6 = shift - 8;
+                var pass = [_]usize{0} ** 256;
+                for (src) |e| pass[@as(usize, @intCast((e.hash >> sh) & 0xff))] += 1;
+                var acc: usize = 0;
+                for (&pass) |*p| {
+                    const t = p.*;
+                    p.* = acc;
+                    acc += t;
+                }
+                for (src) |e| {
+                    const d: usize = @intCast((e.hash >> sh) & 0xff);
+                    scratch[pass[d]] = e;
+                    pass[d] += 1;
+                }
+                src = scratch;
+            }
+            if (over) |o| {
+                for (src) |e| {
+                    if (!self.placeUniqueBounded(e.hash, e.ref, lo, hi)) {
+                        o.append(smp_allocator, e) catch util.oom();
+                    }
+                }
+            } else {
                 for (src) |e| self.placeUniqueRef(e.hash, e.ref);
             }
         }

@@ -1488,7 +1488,7 @@ fn restoreE(
         const f = eval.forceAll(self, w.depth, cur);
         const binder_name, const binder_style, const dom, const clo = switch (f.*) {
             .pi => |b| .{ b.binder_name, b.binder_style, b.domain, &f.pi.body },
-            .lam => |b| .{ b.binder_name, b.binder_style, eval.lamDomain(self, w.depth, f), &f.lam.body },
+            .lam => |b| .{ b.binder_name, b.binderStyle(), eval.lamDomain(self, w.depth, f), &f.lam.body },
             else => return tc.reject("malformed recursor", .{}),
         };
         domains.append(self.ctx.bump, quote.quote(self, w.depth, dom)) catch util.oom();

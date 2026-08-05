@@ -51,7 +51,7 @@ pub fn quoteWith(self: *TypeChecker, hctx: anytype, depth: u32, v0: V) tc.Reject
                 const dom = eval.lamDomain(self, depth, v);
                 const fresh = eval.mkBvarHc(self, depth, dom);
                 const body = eval.applyClosure(self, depth + 1, &v.lam.body, fresh, dom);
-                break :lam TcCtx.mkLambda(self.ctx, l.binder_name, l.binder_style, try quoteWith(self, hctx, depth, dom), try quoteWith(self, hctx, depth + 1, body));
+                break :lam TcCtx.mkLambda(self.ctx, l.binder_name, l.binderStyle(), try quoteWith(self, hctx, depth, dom), try quoteWith(self, hctx, depth + 1, body));
             },
             .pi => |p| pi: {
                 const fresh = eval.mkBvarHc(self, depth, p.domain);

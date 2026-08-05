@@ -60,6 +60,7 @@ fn readInput(io: std.Io, gpa: std.mem.Allocator, source: Options.Source) !Input 
 }
 
 pub fn run(io: std.Io, gpa: std.mem.Allocator, options: Options) !void {
+    util.detectCpuFeatures();
     var input = try readInput(io, gpa, options.source);
     errdefer input.release(gpa);
     var global_arena = Arena.init(util.smp_allocator);

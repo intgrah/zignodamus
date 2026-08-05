@@ -120,10 +120,17 @@ pub const Value = union(enum) {
     },
     lam: struct {
         binder_name: NamePtr,
-        binder_style: BinderStyle,
-        binder_type: ExprPtr,
+        tagged_type: ExprPtr,
         domain: ?V,
         body: Closure,
+
+        pub fn binderType(self: @This()) ExprPtr {
+            return self.tagged_type.untag();
+        }
+
+        pub fn binderStyle(self: @This()) BinderStyle {
+            return @enumFromInt(self.tagged_type.tag());
+        }
     },
     pi: struct {
         binder_name: NamePtr,
@@ -177,11 +184,8 @@ pub const Env = struct {
     lsub: ?*const LevelSub,
     hash: u64,
     len: u32,
-    /// Single-entry pruneEnv memo: prune_r is the pruned env for mask prune_mask
-    prune_mask: u64,
-    prune_r: E,
 
-    pub const nil: Env = .{ .v = undefined, .parent = undefined, .frame = null, .lsub = null, .hash = 0, .len = 0, .prune_mask = 0, .prune_r = undefined };
+    pub const nil: Env = .{ .v = undefined, .parent = undefined, .frame = null, .lsub = null, .hash = 0, .len = 0 };
 
     pub fn getHash(self: *const Env) u64 {
         return self.hash;
@@ -272,7 +276,7 @@ pub fn envExtend(arena: *Arena, parent: E, v: V) E {
     const parent_hash = parent.getHash();
     const hash = parent_hash *% 0x9E3779B97F4A7C15 +% v_hash;
     const e = arena.create(Env);
-    e.* = .{ .v = v, .parent = parent, .frame = null, .lsub = parent.lsub, .hash = hash, .len = parent.len + 1, .prune_mask = 0, .prune_r = undefined };
+    e.* = .{ .v = v, .parent = parent, .frame = null, .lsub = parent.lsub, .hash = hash, .len = parent.len + 1 };
     return e;
 }
 
@@ -347,8 +351,7 @@ pub fn mkLam(
     const v = arena.create(Value);
     v.* = .{ .lam = .{
         .binder_name = binder_name,
-        .binder_style = binder_style,
-        .binder_type = binder_type,
+        .tagged_type = binder_type.withTag(@intFromEnum(binder_style)),
         .domain = null,
         .body = body,
     } };

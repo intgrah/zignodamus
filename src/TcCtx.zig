@@ -87,11 +87,6 @@ pub fn allocExpr(self: *TcCtx, e: *const expr.Expr) ExprPtr {
     if (self.dag.exprs.get(e)) |r| {
         return ExprPtr.local(r);
     }
-    if (!isExprLocalOnly(e)) {
-        if (self.export_file.dag.exprs.get(e)) |r| {
-            return ExprPtr.global(r);
-        }
-    }
     return ExprPtr.local(self.dag.exprs.insert(self.arena, e));
 }
 

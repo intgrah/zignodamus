@@ -91,9 +91,9 @@ fn mainInner(init: std.process.Init) !void {
     };
 
     if (comptime builtin.abi.isGnu()) {
+        _ = mallopt(M_TRIM_THRESHOLD, -1);
+        _ = mallopt(M_MMAP_THRESHOLD, 256 * 1024 * 1024);
         if (options.config.num_threads <= 1) {
-            _ = mallopt(M_TRIM_THRESHOLD, -1);
-            _ = mallopt(M_MMAP_THRESHOLD, 256 * 1024 * 1024);
             _ = mallopt(M_ARENA_MAX, 1);
         }
     }

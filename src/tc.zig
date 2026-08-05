@@ -49,7 +49,7 @@ pub const TcCache = struct {
     level_subs: swiss_map.FxHashMap(struct { LevelsPtr, LevelsPtr }, *const value.LevelSub) = .empty,
     lsub_bases: swiss_map.FxHashMap(usize, E) = .empty,
     rigid_hc: swiss_map.FxHashMap(struct { u8, u64, u64, usize }, V) = .empty,
-    unfold_hc: swiss_map.FxHashMap(struct { NamePtr, LevelsPtr, usize, usize }, V) = .empty,
+    unfold_hc: swiss_map.FxHashMap(struct { usize, usize }, V) = .empty,
     iota_stuck: swiss_map.FxHashSet(usize) = .empty,
     struct_eta_cache: swiss_map.FxHashMap(struct { usize, NamePtr }, ?V) = .empty,
     iota_cache: swiss_map.FxHashMap(usize, V) = .empty,
@@ -189,7 +189,12 @@ pub fn reportWithName(d: *const Declar, err: Reject) void {
     }
 }
 
-const session_budget: usize = 1 << 23;
+const per_thread_budget: usize = 6 << 20;
+const machine_budget: usize = 10 << 20;
+
+fn sessionBudget(num_threads: usize) usize {
+    return @min(per_thread_budget, machine_budget / @max(1, num_threads));
+}
 
 const Session = struct {
     ar: Arena,
@@ -223,10 +228,11 @@ pub fn checkAllDeclarsSerial(self: *const ExportFile) void {
             var s: Session = undefined;
             Session.init(ef, &s);
             defer s.deinit();
+            const budget = sessionBudget(1);
             var it = ef.declars.iterator();
             while (it.next()) |entry| {
                 checkDeclarWith(ef, entry.value_ptr, &s.ar, &s.ctx, &s.cache);
-                if (s.ar.bytes > session_budget) s.recycle();
+                if (s.ar.bytes > budget) s.recycle();
             }
         }
     };
@@ -239,7 +245,7 @@ const chunk_size: usize = 64;
 fn checkAllDeclarsPar(self: *const ExportFile, num_threads: usize) void {
     var task_num = std.atomic.Value(usize).init(0);
     const Worker = struct {
-        fn run(ef: *const ExportFile, counter: *std.atomic.Value(usize)) void {
+        fn run(ef: *const ExportFile, counter: *std.atomic.Value(usize), budget: usize) void {
             var s: Session = undefined;
             Session.init(ef, &s);
             defer s.deinit();
@@ -250,7 +256,7 @@ fn checkAllDeclarsPar(self: *const ExportFile, num_threads: usize) void {
                 const end = @min(start + chunk_size, total);
                 for (ef.declars.values()[start..end]) |*d| {
                     checkDeclarWith(ef, d, &s.ar, &s.ctx, &s.cache);
-                    if (s.ar.bytes > session_budget) s.recycle();
+                    if (s.ar.bytes > budget) s.recycle();
                 }
             }
         }
@@ -262,7 +268,7 @@ fn checkAllDeclarsPar(self: *const ExportFile, num_threads: usize) void {
         const t = std.Thread.spawn(
             .{ .stack_size = root.stack_size },
             Worker.run,
-            .{ self, &task_num },
+            .{ self, &task_num, sessionBudget(num_threads) },
         ) catch util.oom();
         handles.append(util.smp_allocator, t) catch util.oom();
     }

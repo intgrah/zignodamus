@@ -204,6 +204,7 @@ pub fn parseExportFile(ar: *Arena, input: []const u8, config: Config) ParseError
         try parseRegion(&parser, ta, &scratch, scratch_mark, tail, rest, false);
     }
 
+    @import("../interner.zig").build_threads = @max(1, config.num_threads);
     buildNameTable(&parser.dag, parser.names_by_idx.slice());
     parser.names_by_idx.deinit();
     parser.levels_by_idx.deinit();
