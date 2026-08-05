@@ -18,6 +18,7 @@ fn Interner(comptime T: type) type {
         cap: usize = 0,
         count: usize = 0,
         growth_left: usize = 0,
+        rebuild_cap: usize = 0,
 
         const Self = @This();
         const Slot = usize;
@@ -112,8 +113,16 @@ fn Interner(comptime T: type) type {
             }
         }
 
+        fn capFor(n: usize) usize {
+            var c: usize = 16;
+            while (maxLoad(c) < n) c *= 2;
+            return c;
+        }
+
         fn maybeGrow(self: *Self) void {
-            if (self.growth_left == 0) self.allocCap(if (self.cap == 0) 16 else self.cap * 2);
+            if (self.growth_left == 0) {
+                self.allocCap(if (self.cap == 0) @max(16, self.rebuild_cap) else self.cap * 2);
+            }
         }
 
         pub inline fn get(self: *const Self, v: *const T) ?*const T {
@@ -313,7 +322,9 @@ fn Interner(comptime T: type) type {
 
         pub fn clearShrink(self: *Self, max_keep_cap: usize) void {
             if (self.cap > max_keep_cap) {
+                const want = capFor(self.count);
                 self.deinit();
+                self.rebuild_cap = want;
                 return;
             }
             self.clear();

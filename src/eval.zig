@@ -135,7 +135,7 @@ fn frameEnv(self: *TypeChecker, f: *const value.Frame) E {
     return &pair.env;
 }
 
-fn pruneEnv(self: *TypeChecker, e: E, mask: u64) E {
+inline fn pruneEnv(self: *TypeChecker, e: E, mask: u64) E {
     if (mask == 0) {
         return lsubBase(self, e.lsub);
     }
@@ -159,6 +159,10 @@ fn pruneEnv(self: *TypeChecker, e: E, mask: u64) E {
         mh.prune_r = hit;
         return hit;
     }
+    return pruneEnvCold(self, e, mask, ent);
+}
+
+noinline fn pruneEnvCold(self: *TypeChecker, e: E, mask: u64, ent: *tc.PruneEntry) E {
     var buf: [64]V = undefined;
     var hasher = FxHasher{};
     hasher.writeU64(if (e.lsub) |l| @intFromPtr(l) else 0);

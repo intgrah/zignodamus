@@ -189,7 +189,7 @@ pub fn reportWithName(d: *const Declar, err: Reject) void {
     }
 }
 
-const session_budget: usize = 1 << 22;
+const session_budget: usize = 1 << 23;
 
 const Session = struct {
     ar: Arena,
